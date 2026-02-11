@@ -6,9 +6,12 @@
 # link to correct cudnn and cuda
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
-CKPT=MODELS/evoworld_curve_unity
-BASE_FOLDER=data/unity_curve
-OUTPUT_ROOT=output
+export CUDA_VISIBLE_DEVICES=4
+
+# CKPT=MODELS/evoworld_curve_unity
+CKPT=/data3/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93/
+BASE_FOLDER=/data2/songcx/dataset/evoworld/unity_curve
+OUTPUT_ROOT=/data3/songcx/results/evoworld/output_results/evo_baseline
 SAVE_DIR=$OUTPUT_ROOT/$(basename $CKPT)/eval_unity_curve
 START_IDX=0
 NUM_DATA_PER_GPU=200

@@ -172,6 +172,22 @@ def main():
     """Main function for panoramic to perspective conversion."""
     args = parse_arguments()
 
+# ------------------ 新增代码开始 ------------------
+    # 1. 获取输入图片的数量
+    input_paths = collect_image_paths(args.data_folder)
+    num_inputs = len(input_paths)
+
+    # 2. 检查输出文件夹和相机文件是否存在
+    if os.path.exists(args.output_folder) and os.path.exists(args.output_camera_file):
+        # 3. 统计输出文件夹里的 png 图片数量
+        output_images = [f for f in os.listdir(args.output_folder) if f.endswith(".png")]
+        num_outputs = len(output_images)
+
+        # 4. 如果数量一致，说明已经处理完了，直接跳过
+        if num_inputs == num_outputs:
+            print(f"Skipping {args.data_folder}: Found {num_outputs} images and camera file. Already processed.")
+            return
+
     # Initialize Equi2Pers
     equi2pers = Equi2Pers(
         height=384,

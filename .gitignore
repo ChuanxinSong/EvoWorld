@@ -49,7 +49,11 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
-cover/
+
+# Data and Outputs
+unity_curve/
+output_results/
+EvoWorld_backup/
 
 # Translations
 *.mo
@@ -217,3 +221,10 @@ output
 google
 token.pickle
 scripts/upload_models_and_data
+# Custom ignores
+unity_curve/
+output_results/
+EvoWorld_backup/
+unity_curve
+output_results
+EvoWorld_backup

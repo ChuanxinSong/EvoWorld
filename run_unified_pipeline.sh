@@ -2,13 +2,19 @@
 
 # Unified Loop Consistency Pipeline Runner
 # This script runs the unified pipeline that combines generation and reconstruction
+export CUDA_VISIBLE_DEVICES=5
 
 # link to correct cudnn and cuda
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
-CKPT=MODELS/evoworld_curve_unity
+# CKPT=MODELS/evoworld_curve_unity
+# CKPT=/data1/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93
+CKPT=/data3/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93
+
 BASE_FOLDER=example/case_000
-OUTPUT_ROOT=output
+# OUTPUT_ROOT=output
+OUTPUT_ROOT=output_results
+
 SAVE_DIR=$OUTPUT_ROOT/$(basename $CKPT)/unified_multiple_demo
 START_IDX=0
 NUM_DATA_PER_GPU=1
