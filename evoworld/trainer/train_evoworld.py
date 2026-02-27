@@ -793,22 +793,21 @@ def main():
                                         args.output_dir, removing_checkpoint
                                     )
                                     shutil.rmtree(removing_checkpoint)
-                    # sample images!
-                    if (
-                        (global_step % args.validation_steps == 0) or (global_step == 1)
-                    ):
-                        # All processes release training cache before validation to prevent OOM.
-                        torch.cuda.empty_cache()
 
-                        # All processes must participate in unwrap_model to allow ZeRO parameter gathering.
-                        # Only rank 0 will actually run inference, but all ranks must call unwrap_model together.
-                        unwrapped_unet = accelerator.unwrap_model(unet)
-                        unwrapped_image_encoder = accelerator.unwrap_model(image_encoder)
-                        unwrapped_vae = accelerator.unwrap_model(vae)
+                # sample images!
+                if (
+                    (global_step % args.validation_steps == 0) or (global_step == 1)
+                ):
+                    # All processes release training cache before validation to prevent OOM.
+                    torch.cuda.empty_cache()
 
-                    if (
-                        (global_step % args.validation_steps == 0) or (global_step == 1)
-                    ) and accelerator.is_main_process:
+                    # All processes must participate in unwrap_model to allow ZeRO parameter gathering.
+                    # Only rank 0 will actually run inference, but all ranks must call unwrap_model together.
+                    unwrapped_unet = accelerator.unwrap_model(unet)
+                    unwrapped_image_encoder = accelerator.unwrap_model(image_encoder)
+                    unwrapped_vae = accelerator.unwrap_model(vae)
+
+                    if accelerator.is_main_process:
                         logger.info(
                             f"Running validation... \n Generating {args.num_validation_images} videos."
                         )
