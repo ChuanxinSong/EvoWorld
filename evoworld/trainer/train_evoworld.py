@@ -76,6 +76,27 @@ from evoworld.trainer.trainer_utils import (
 )
 from utils.plucker_embedding import equirectangular_to_ray, ray_c2w_to_plucker
 
+# 参考 https://github.com/huggingface/accelerate/issues/3481
+import contextlib
+from accelerate import Accelerator
+from accelerate.utils import DistributedType
+
+# =================================================================
+# Monkey Patch: 临时修复 DeepSpeed ZeRO 2/3 下 accelerate.accumulate 的报错
+# =================================================================
+original_no_sync = Accelerator.no_sync
+
+def patched_no_sync(self, model):
+    # 如果是 DeepSpeed 且使用了 ZeRO Stage 2 或 3，直接跳过 no_sync
+    # if self.distributed_type == DistributedType.DEEPSPEED:
+    if self.distributed_type == DistributedType.DEEPSPEED and self.state.deepspeed_plugin.zero_stage >= 2:
+        return contextlib.nullcontext()
+    
+    # 其他情况（如 DDP, ZeRO 1），使用原来的逻辑
+    return original_no_sync(self, model)
+
+Accelerator.no_sync = patched_no_sync
+
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
 check_min_version("0.24.0.dev0")
 logger = get_logger(__name__, log_level="INFO")
@@ -775,6 +796,18 @@ def main():
                     # sample images!
                     if (
                         (global_step % args.validation_steps == 0) or (global_step == 1)
+                    ):
+                        # All processes release training cache before validation to prevent OOM.
+                        torch.cuda.empty_cache()
+
+                        # All processes must participate in unwrap_model to allow ZeRO parameter gathering.
+                        # Only rank 0 will actually run inference, but all ranks must call unwrap_model together.
+                        unwrapped_unet = accelerator.unwrap_model(unet)
+                        unwrapped_image_encoder = accelerator.unwrap_model(image_encoder)
+                        unwrapped_vae = accelerator.unwrap_model(vae)
+
+                    if (
+                        (global_step % args.validation_steps == 0) or (global_step == 1)
                     ) and accelerator.is_main_process:
                         logger.info(
                             f"Running validation... \n Generating {args.num_validation_images} videos."
@@ -788,9 +821,9 @@ def main():
                         # The models need unwrapping because for compatibility in distributed training mode.
                         pipeline = StableVideoDiffusionPipeline.from_pretrained(
                             args.pretrained_model_name_or_path,
-                            unet=accelerator.unwrap_model(unet),
-                            image_encoder=accelerator.unwrap_model(image_encoder),
-                            vae=accelerator.unwrap_model(vae),
+                            unet=unwrapped_unet,
+                            image_encoder=unwrapped_image_encoder,
+                            vae=unwrapped_vae,
                             revision=args.revision,
                             torch_dtype=weight_dtype,
                         )
@@ -886,6 +919,9 @@ def main():
 
                         del pipeline
                         torch.cuda.empty_cache()
+
+                    # All processes wait for main process to finish validation before continuing training.
+                    accelerator.wait_for_everyone()
 
                 # save checkpoints!
                 # DeepSpeed Model and Optimizer will take a long time if we do it in main process
