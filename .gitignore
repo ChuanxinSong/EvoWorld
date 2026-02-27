@@ -225,6 +225,8 @@ scripts/upload_models_and_data
 unity_curve/
 output_results/
 EvoWorld_backup/
+evo_checkpoints/
 unity_curve
 output_results
 EvoWorld_backup
+evo_checkpoints

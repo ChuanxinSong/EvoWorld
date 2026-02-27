@@ -651,7 +651,8 @@ def main():
 
                     # Sample masks for the original images.
                     image_mask = random_p < args.conditioning_dropout_prob
-                    image_mask = image_mask.repeat(bsz, 1, 1)
+                    # import pdb; pdb.set_trace()
+                    image_mask = image_mask.reshape(bsz, 1, 1)
 
                     null_conditioning = torch.zeros_like(encoder_hidden_states)
                     encoder_hidden_states = torch.where(
@@ -665,13 +666,15 @@ def main():
                     image_mask = 1 - (random_p < args.conditioning_dropout_prob).to(
                         image_mask_dtype
                     )
-                    image_mask = image_mask.repeat(
+                    image_mask = image_mask.reshape(bsz, 1, 1, 1, 1).expand(
                         bsz, conditional_latents.shape[1], 1, 1, 1
                     )
                     mem_mask = 1 - (random_p < 2 * args.conditioning_dropout_prob).to(
                         image_mask_dtype
                     )
-                    mem_mask = mem_mask.repeat(bsz, conditional_latents.shape[1], 1, 1, 1)
+                    mem_mask = mem_mask.reshape(bsz, 1, 1, 1, 1).expand(
+                        bsz, conditional_latents.shape[1], 1, 1, 1
+                    )
                     # Final image conditioning.
                     conditional_latents[:, :, :4] = (image_mask * conditional_latents[:, :, :4])
                     conditional_latents[:, :, 4:] = (mem_mask * conditional_latents[:, :, 4:])
