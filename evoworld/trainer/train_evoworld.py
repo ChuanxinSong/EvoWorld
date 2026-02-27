@@ -331,6 +331,7 @@ def main():
         height=args.height,
         trajectory_file=None,
         memory_sampling_args=loop_args,
+        sequence_length=args.num_frames,
         last_segment_length=args.num_frames,
         reprojection_name=args.reprojection_name,
     )
@@ -341,6 +342,7 @@ def main():
         height=args.height,
         trajectory_file=None,
         memory_sampling_args=loop_args,
+        sequence_length=args.num_frames,
         last_segment_length=args.num_frames,
         reprojection_name=args.reprojection_name,
     )
@@ -511,7 +513,7 @@ def main():
         unet.train()
         train_loss = 0.0
         for step, batch in enumerate(train_dataloader):
-            torch.cuda.empty_cache()
+            # torch.cuda.empty_cache()
             # Skip steps until we reach the resumed step
             if (
                 args.resume_from_checkpoint
@@ -802,7 +804,8 @@ def main():
 
                         with torch.autocast(
                             str(accelerator.device).replace(":0", ""),
-                            enabled=accelerator.mixed_precision == "fp16",
+                            enabled=accelerator.mixed_precision in ["fp16", "bf16"],
+                            dtype=torch.float16 if accelerator.mixed_precision == "fp16" else torch.bfloat16,
                         ):
                             for val_step, batch in enumerate(val_loader):
                                 if val_step >= args.num_validation_images:

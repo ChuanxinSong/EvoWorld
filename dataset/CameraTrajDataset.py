@@ -473,6 +473,10 @@ class CameraTrajDataset(Dataset):
         # only keep *.png files
         reprojection_list = [f for f in reprojection_list if f.endswith(".png")]
         reprojection_length = len(reprojection_list)
+        # 限制加载的重投影图像数量，使其与 last_segment_length - 1 匹配
+        # 因为后面会添加 first_frame，所以这里加载 last_segment_length - 1 张
+        max_reprojection_frames = self.last_segment_length - 1
+        reprojection_length = min(reprojection_length, max_reprojection_frames)
         #  load image from episode
         for i in range(0, reprojection_length):
             image_name = self.image_name_prefix + f"{i:02}.png"
@@ -500,6 +504,7 @@ class CameraTrajDataset(Dataset):
             cur_images = self.transform(cur_images)
             images.append(cur_images)
         first_frame = self.load_images(episode, 1, 2)
+        # TODO: consider only loading the first frame without transformation, since the reprojection images are already transformed. This can avoid potential inconsistency between the first frame and reprojection images.
         # # consider changing to:
         # episode_length = len(self.trajectories['raw_trajectories'][episode].keys())
         # valid_range_start_idx = episode_length - self.last_segment_length + 1 if not self.load_complete_episode else 1
