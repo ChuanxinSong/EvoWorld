@@ -3,7 +3,7 @@
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
 # Base directory containing episode folders.
-BASE_DIR="/data2/songcx/dataset/evoworld/unity_curve/train"
+BASE_DIR="/data2/songcx/dataset/evoworld/unity_curve/val"
 
 # Loop over every directory matching the pattern "episode_*".
 for EPISODE_PATH in "$BASE_DIR"/*; do

@@ -16,8 +16,10 @@ import torch
 from tqdm import tqdm
 
 # Set environment variables
-os.environ["TORCH_HOME"] = "model_cache"
-os.environ["HF_HOME"] = "model_cache"
+# os.environ["TORCH_HOME"] = "model_cache"
+# os.environ["HF_HOME"] = "model_cache"
+
+# To enable 3D rendering with Open3D on a server (without a monitor).
 os.environ["PYGLET_HEADLESS"] = "1"
 os.environ["PYGLET_BACKEND"] = "egl"
 
@@ -27,7 +29,7 @@ from evoworld.reprojection.reproject_vggt_open3d_utils import (
     predictions_to_target_view,
 )
 
-
+# Importing the VGGT path
 sys.path.append("third_party/vggt/")
 from third_party.vggt.vggt.models.vggt import VGGT
 from third_party.vggt.vggt.utils.geometry import unproject_depth_map_to_point_map
@@ -108,7 +110,7 @@ class VGGTProcessor:
         predictions["world_points_from_depth"] = world_points
 
         # Clean up
-        torch.cuda.empty_cache()
+        # torch.cuda.empty_cache()
         return predictions
 
 

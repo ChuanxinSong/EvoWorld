@@ -401,9 +401,10 @@ class UNetSpatioTemporalConditionModel(ModelMixin, ConfigMixin, UNet2DConditionL
         t_emb = self.time_proj(timesteps)
 
         # `Timesteps` does not contain any weights and will always return f32 tensors
-        # but time_embedding might actually be running in fp16. so we need to cast here.
+        # but time_embedding might actually be running in fp16/bf16. so we need to cast here.
         # there might be better ways to encapsulate this.
-        t_emb = t_emb.to(dtype=sample.dtype)
+        # Cast to the dtype of time_embedding weights to avoid dtype mismatch
+        t_emb = t_emb.to(dtype=self.time_embedding.linear_1.weight.dtype)
 
         emb = self.time_embedding(t_emb)
 
@@ -423,6 +424,8 @@ class UNetSpatioTemporalConditionModel(ModelMixin, ConfigMixin, UNet2DConditionL
         encoder_hidden_states = encoder_hidden_states.repeat_interleave(num_frames, dim=0)
 
         # 2. pre-process
+        # Cast sample to match conv_in dtype for mixed precision training (fp16/bf16)
+        sample = sample.to(dtype=self.conv_in.weight.dtype)
         sample = self.conv_in(sample)
 
         image_only_indicator = torch.zeros(batch_size, num_frames, dtype=sample.dtype, device=sample.device)

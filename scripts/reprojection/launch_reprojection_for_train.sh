@@ -1,10 +1,13 @@
 #!/bin/bash
+export CUDA_VISIBLE_DEVICES=4
+
+# 确保能够找到 Conda 环境中的动态链接库（比如 Open3D 渲染需要的库）
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 SCRIPT_PATH="scripts/reprojection/reproject_vggt_open3d_for_train.sh"
 
 # Define fixed parameters
-DATA_FOLDER="/data2/songcx/dataset/evoworld/unity_curve/train"   # <-- Replace with actual data folder
-CHUNK_NUM=16      # Total number of chunks
+DATA_FOLDER="/data2/songcx/dataset/evoworld/unity_curve/val"   # <-- Replace with actual data folder
+CHUNK_NUM=1      # Total number of chunks
 
 for CHUNK_ID in $(seq 0 $((CHUNK_NUM-1))); do
     echo "Launching chunk $CHUNK_ID..."
