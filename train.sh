@@ -5,6 +5,11 @@
 # unset HF_HUB_ENDPOINT
 # export HF_ENDPOINT=https://huggingface.co
 
+# ======================================================================================
+# per gpu bsz=1, 不使用梯度检查点，分辨率1024*576，num_frames=10，占用显存52-53g
+# per gpu bsz=1, 使用梯度检查点，分辨率1024*576，num_frames=25，占用显存78-79g
+# ======================================================================================
+
 
 # 修改为你的实际路径
 BASE_FOLDER="/data2/songcx/dataset/evoworld/unity_curve"
@@ -12,10 +17,11 @@ BASE_FOLDER="/data2/songcx/dataset/evoworld/unity_curve"
 REPROJ_NAME="rendered_panorama_vggt_open3d_camera_aligned_new_code"
 
 # GPU settings
-GPU_IDS="4" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
+GPU_IDS="4,7" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
 
 # configuration file, you can add more config files in the config folder
-CONFIG_NAME="deepspeed_o1_4gpu"
+# CONFIG_NAME="deepspeed_o1_4gpu"
+CONFIG_NAME="deepspeed_o2"
 
 # 指定主进程端口号（用于多进程通信）
 MASTER_PORT=49502
@@ -46,7 +52,7 @@ NUM_VALIDATION_IMAGES=3
 RESUME_FROM="latest"
 CURRENT_TIME=$(date +"%Y%m%d_%H%M%S")
 BATCH_SIZE_PER_GPU=1
-GRAD_ACCUM_STEP=16
+GRAD_ACCUM_STEP=8
 # GPUS_PER_NODE=$(nvidia-smi -L | wc -l) # 注释掉这行，防止覆盖你自定义的 GPU 数量
 GPUS_PER_NODE=$(echo $GPU_IDS | tr ',' '\n' | wc -l)
 WORLD_SIZE=$((GPUS_PER_NODE * GRAD_ACCUM_STEP * BATCH_SIZE_PER_GPU))
@@ -84,7 +90,6 @@ accelerate launch --config_file="config/${CONFIG_NAME}.yaml" \
     --logging_dir="$OUTPUT_ROOT/$DATASET_NAME-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES/logs" \
     --per_gpu_batch_size=$BATCH_SIZE_PER_GPU \
     --gradient_accumulation_steps=$GRAD_ACCUM_STEP \
-    --gradient_checkpointing \
     --max_train_steps=$STEP \
     --checkpointing_steps=$SAVE_INTERVAL \
     --checkpoints_total_limit=4 \
@@ -97,4 +102,5 @@ accelerate launch --config_file="config/${CONFIG_NAME}.yaml" \
     --validation_steps=$VALIDATION_STEP \
     --num_validation_images=$NUM_VALIDATION_IMAGES \
     --add_plucker \
-    --resume_from_checkpoint=$RESUME_FROM
+    --resume_from_checkpoint=$RESUME_FROM \
+    # --gradient_checkpointing
