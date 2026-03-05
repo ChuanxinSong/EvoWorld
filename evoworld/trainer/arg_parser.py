@@ -264,6 +264,16 @@ def parse_args():
         default=None,
     )
     parser.add_argument(
+        "--no_validation",
+        action="store_true",
+        help="Skip validation during training to speed up the training process.",
+    )
+    parser.add_argument(
+        "--unfreeze_all",
+        action="store_true",
+        help="Unfreeze all UNet parameters for full fine-tuning instead of only training selected layers.",
+    )
+    parser.add_argument(
         "--add_plucker",
         action="store_true",
         help="Whether to add plucker embedding to the unet",
@@ -274,6 +284,67 @@ def parse_args():
         help="Whether to denoise plucker embedding",
     )
     parser.add_argument("--reprojection_name", type=str, default="rendered_panorama")
+
+    # Pretrain mode: random mask video inpainting (no reprojection needed)
+    parser.add_argument(
+        "--pretrain_mode",
+        action="store_true",
+        help="Enable pretrain mode: random pixel masking on GT frames instead of reprojection.",
+    )
+    parser.add_argument(
+        "--mask_ratio_min",
+        type=float,
+        default=0.3,
+        help="(Deprecated, kept for backward compat) Overall mask ratio min. Use patch/pixel ratios instead.",
+    )
+    parser.add_argument(
+        "--mask_ratio_max",
+        type=float,
+        default=0.9,
+        help="(Deprecated, kept for backward compat) Overall mask ratio max. Use patch/pixel ratios instead.",
+    )
+    parser.add_argument(
+        "--stride_min",
+        type=int,
+        default=1,
+        help="Minimum frame sampling stride in pretrain mode.",
+    )
+    parser.add_argument(
+        "--stride_max",
+        type=int,
+        default=10,
+        help="Maximum frame sampling stride in pretrain mode.",
+    )
+    parser.add_argument(
+        "--patch_size",
+        type=int,
+        default=32,
+        help="Patch size for random patch masking in pretrain mode (e.g. 16 or 32).",
+    )
+    parser.add_argument(
+        "--patch_mask_ratio_min",
+        type=float,
+        default=0.2,
+        help="Minimum ratio of patches to mask per frame in pretrain mode.",
+    )
+    parser.add_argument(
+        "--patch_mask_ratio_max",
+        type=float,
+        default=0.6,
+        help="Maximum ratio of patches to mask per frame in pretrain mode.",
+    )
+    parser.add_argument(
+        "--pixel_mask_ratio_min",
+        type=float,
+        default=0.1,
+        help="Minimum ratio of pixels to mask (within unmasked patches) per frame in pretrain mode.",
+    )
+    parser.add_argument(
+        "--pixel_mask_ratio_max",
+        type=float,
+        default=0.4,
+        help="Maximum ratio of pixels to mask (within unmasked patches) per frame in pretrain mode.",
+    )
 
     args = parser.parse_args()
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))

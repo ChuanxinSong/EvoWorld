@@ -321,18 +321,24 @@ def main():
     parameters_list = []
 
     # Customize the parameters that need to be trained;
-    for name, param in unet.named_parameters():
-        if (
-            "temporal_transformer_block" in name
-            or "conv_in" in name
-            or "conv_out" in name
-            or "norm" in name
-            or "Norm" in name
-        ):
-            parameters_list.append(param)
+    if args.unfreeze_all:
+        # Full fine-tuning: unfreeze all UNet parameters
+        for name, param in unet.named_parameters():
             param.requires_grad = True
-        else:
-            param.requires_grad = False
+            parameters_list.append(param)
+    else:
+        for name, param in unet.named_parameters():
+            if (
+                "temporal_transformer_block" in name
+                or "conv_in" in name
+                or "conv_out" in name
+                or "norm" in name
+                or "Norm" in name
+            ):
+                parameters_list.append(param)
+                param.requires_grad = True
+            else:
+                param.requires_grad = False
     logger.info(f"Trainable params num: {len(parameters_list)}")
 
     optimizer = optimizer_cls(
@@ -355,18 +361,41 @@ def main():
         sequence_length=args.num_frames,
         last_segment_length=args.num_frames,
         reprojection_name=args.reprojection_name,
+        pretrain_mode=args.pretrain_mode,
+        mask_ratio_min=args.mask_ratio_min,
+        mask_ratio_max=args.mask_ratio_max,
+        stride_min=args.stride_min,
+        stride_max=args.stride_max,
+        patch_size=args.patch_size,
+        patch_mask_ratio_min=args.patch_mask_ratio_min,
+        patch_mask_ratio_max=args.patch_mask_ratio_max,
+        pixel_mask_ratio_min=args.pixel_mask_ratio_min,
+        pixel_mask_ratio_max=args.pixel_mask_ratio_max,
     )
 
-    val_dataset = CameraTrajDataset(
-        f"{args.base_folder}/val",
-        width=args.width,
-        height=args.height,
-        trajectory_file=None,
-        memory_sampling_args=loop_args,
-        sequence_length=args.num_frames,
-        last_segment_length=args.num_frames,
-        reprojection_name=args.reprojection_name,
-    )
+    val_dataset = None
+    val_loader = None
+    if not args.no_validation:
+        val_dataset = CameraTrajDataset(
+            f"{args.base_folder}/val",
+            width=args.width,
+            height=args.height,
+            trajectory_file=None,
+            memory_sampling_args=loop_args,
+            sequence_length=args.num_frames,
+            last_segment_length=args.num_frames,
+            reprojection_name=args.reprojection_name,
+            pretrain_mode=args.pretrain_mode, 
+            mask_ratio_min=args.mask_ratio_min,
+            mask_ratio_max=args.mask_ratio_max,
+            stride_min=args.stride_min,
+            stride_max=args.stride_max,
+            patch_size=args.patch_size,
+            patch_mask_ratio_min=args.patch_mask_ratio_min,
+            patch_mask_ratio_max=args.patch_mask_ratio_max,
+            pixel_mask_ratio_min=args.pixel_mask_ratio_min,
+            pixel_mask_ratio_max=args.pixel_mask_ratio_max,
+        )
 
     sampler = RandomSampler(train_dataset)
     train_dataloader = torch.utils.data.DataLoader(
@@ -441,6 +470,7 @@ def main():
     logger.info(f"  Total optimization steps = {args.max_train_steps}")
     global_step = 0
     first_epoch = 0
+    resume_step = 0
 
     def encode_image(pixel_values):
         # pixel: [-1, 1]
@@ -520,7 +550,9 @@ def main():
     logger.info(args)
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(
-        range(global_step, args.max_train_steps),
+        range(args.max_train_steps),
+        initial=global_step,
+        total=args.max_train_steps,
         disable=not accelerator.is_local_main_process,
     )
     progress_bar.set_description("Steps")
@@ -533,17 +565,25 @@ def main():
     for epoch in range(first_epoch, args.num_train_epochs):
         unet.train()
         train_loss = 0.0
-        for step, batch in enumerate(train_dataloader):
-            # torch.cuda.empty_cache()
-            # Skip steps until we reach the resumed step
-            if (
-                args.resume_from_checkpoint
-                and epoch == first_epoch
-                and step < resume_step
-            ):
-                if step % args.gradient_accumulation_steps == 0:
-                    progress_bar.update(1)
-                continue
+
+        # Use accelerator.skip_first_batches to efficiently skip already-trained batches
+        # instead of iterating and discarding them one by one.
+        if (
+            args.resume_from_checkpoint
+            and epoch == first_epoch
+            and resume_step > 0
+        ):
+            active_dataloader = accelerator.skip_first_batches(
+                train_dataloader, num_batches=resume_step
+            )
+            logger.info(
+                f"Skipping {resume_step} batches in the first epoch (epoch={first_epoch}) "
+                f"to resume from global_step={global_step}."
+            )
+        else:
+            active_dataloader = train_dataloader
+
+        for step, batch in enumerate(active_dataloader):
 
             with accelerator.accumulate(unet):
                 # first, convert images to latent space.
@@ -588,6 +628,24 @@ def main():
                 conditional_pixel_values = torch.cat(
                     (pixel_values[:, 0:1, :, :, :], memorized_pixel_values), dim=1
                 )  # [1, 1+25, 3, 576, 1024]
+
+                # Visualize masked condition images at the first step (pretrain mode only)
+                if args.pretrain_mode and global_step == 0 and step == 0 and accelerator.is_main_process:
+                    vis_save_dir = os.path.join(args.output_dir, "pretrain_vis")
+                    os.makedirs(vis_save_dir, exist_ok=True)
+                    for f_idx in range(num_frames):
+                        # GT frame: pixel_values [bsz, seq, C, H, W], range [-1, 1]
+                        gt_frame = pixel_values[0, f_idx].cpu().float()
+                        gt_frame = ((gt_frame / 2 + 0.5) * 255).clamp(0, 255).to(torch.uint8)
+                        gt_img = Image.fromarray(gt_frame.permute(1, 2, 0).numpy())
+                        gt_img.save(os.path.join(vis_save_dir, f"frame_{f_idx:02d}_gt.png"))
+
+                        # Masked condition frame: memorized_pixel_values [bsz, seq, C, H, W]
+                        masked_frame = memorized_pixel_values[0, f_idx].cpu().float()
+                        masked_frame = ((masked_frame / 2 + 0.5) * 255).clamp(0, 255).to(torch.uint8)
+                        masked_img = Image.fromarray(masked_frame.permute(1, 2, 0).numpy())
+                        masked_img.save(os.path.join(vis_save_dir, f"frame_{f_idx:02d}_masked.png"))
+                    logger.info(f"Saved pretrain visualization to {vis_save_dir}")
 
                 latents = tensor_to_vae_latent(pixel_values, vae)  # [1, 25, 4, 72, 128]
 
@@ -796,7 +854,8 @@ def main():
 
                 # sample images!
                 if (
-                    (global_step % args.validation_steps == 0) or (global_step == 1)
+                    not args.no_validation
+                    and ((global_step % args.validation_steps == 0) or (global_step == 1))
                 ):
                     # All processes release training cache before validation to prevent OOM.
                     torch.cuda.empty_cache()
