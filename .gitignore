@@ -230,3 +230,5 @@ unity_curve
 output_results
 EvoWorld_backup
 evo_checkpoints
+# env config
+paths.env

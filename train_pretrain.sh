@@ -15,7 +15,10 @@
 
 
 # 修改为你的实际路径
-BASE_FOLDER="/data2/songcx/dataset/evoworld/unity_curve"
+source paths.env
+# BASE_FOLDER="/data2/songcx/dataset/evoworld/unity_curve"
+# OUTPUT_ROOT="/data3/songcx/results/evoworld/checkpoints" # 结果保存路径
+# mkdir -p $OUTPUT_ROOT
 # 预训练模式不需要重投影，但参数仍需传入（不会被使用）
 REPROJ_NAME="rendered_panorama_vggt_open3d_camera_aligned_new_code"
 
@@ -74,10 +77,6 @@ PATCH_MASK_RATIO_MIN=0.3
 PATCH_MASK_RATIO_MAX=0.75
 PIXEL_MASK_RATIO_MIN=0.2
 PIXEL_MASK_RATIO_MAX=0.4
-
-# 结果保存路径
-OUTPUT_ROOT="/data3/songcx/results/evoworld/checkpoints"
-mkdir -p $OUTPUT_ROOT
 
 # [Optional] use your own wandb with arg: --report_to wandb
 # export WANDB_RUN_NAME="data-${DATASET_NAME}-lr-${LR}-step-${STEP}-bs-${BATCH_SIZE_PER_GPU}x${GPUS_PER_NODE}x${GRAD_ACCUM_STEP}-${CURRENT_TIME}"

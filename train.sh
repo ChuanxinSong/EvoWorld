@@ -12,7 +12,10 @@
 
 
 # 修改为你的实际路径
-BASE_FOLDER="/data2/songcx/dataset/evoworld/unity_curve"
+source paths.env
+# BASE_FOLDER="/data2/songcx/dataset/evoworld/unity_curve"
+# OUTPUT_ROOT="/data3/songcx/results/evoworld/checkpoints" # 结果保存路径
+# mkdir -p $OUTPUT_ROOT
 # 刚才重投影生成的文件夹名（必须匹配）
 REPROJ_NAME="rendered_panorama_vggt_open3d_camera_aligned_new_code"
 
@@ -56,10 +59,6 @@ GRAD_ACCUM_STEP=16
 # GPUS_PER_NODE=$(nvidia-smi -L | wc -l) # 注释掉这行，防止覆盖你自定义的 GPU 数量
 GPUS_PER_NODE=$(echo $GPU_IDS | tr ',' '\n' | wc -l)
 WORLD_SIZE=$((GPUS_PER_NODE * GRAD_ACCUM_STEP * BATCH_SIZE_PER_GPU))
-
-# 结果保存路径
-OUTPUT_ROOT="/data3/songcx/results/evoworld/checkpoints"
-mkdir -p $OUTPUT_ROOT
 
 # [Optional] use your own wandb with arg: --report_to wandb
 # export WANDB_RUN_NAME="data-${DATASET_NAME}-lr-${LR}-step-${STEP}-bs-${BATCH_SIZE_PER_GPU}x${GPUS_PER_NODE}x${GRAD_ACCUM_STEP}-${CURRENT_TIME}"
