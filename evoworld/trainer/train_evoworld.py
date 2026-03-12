@@ -103,6 +103,37 @@ logger = get_logger(__name__, log_level="INFO")
 PROJ_NAME = "evoworld"
 
 
+def _get_optional_variant_kwargs(model_root: str, subfolder: str) -> dict:
+    """Use fp16 variant when available; fall back for locally saved checkpoints."""
+    root = Path(model_root)
+    if not root.exists():
+        return {"variant": "fp16"}
+
+    folder = root / subfolder
+    if not folder.exists():
+        return {"variant": "fp16"}
+
+    fp16_candidates = (
+        folder / "diffusion_pytorch_model.fp16.safetensors",
+        folder / "diffusion_pytorch_model.fp16.bin",
+    )
+    if any(path.exists() for path in fp16_candidates):
+        return {"variant": "fp16"}
+
+    default_candidates = (
+        folder / "diffusion_pytorch_model.safetensors",
+        folder / "diffusion_pytorch_model.bin",
+    )
+    if any(path.exists() for path in default_candidates):
+        logger.info(
+            f"Local weights under {folder} do not provide an fp16 variant; "
+            "falling back to default serialization."
+        )
+        return {}
+
+    return {"variant": "fp16"}
+
+
 def main():
     loop_args = {
         "sampling_method": "reprojection",
@@ -201,7 +232,7 @@ def main():
         args.pretrained_model_name_or_path,
         subfolder="vae",
         revision=args.revision,
-        variant="fp16",
+        **_get_optional_variant_kwargs(args.pretrained_model_name_or_path, "vae"),
     )
 
     unet = UNetSpatioTemporalConditionModel.from_pretrained(
@@ -212,7 +243,14 @@ def main():
         ),
         subfolder="unet",
         low_cpu_mem_usage=True,
-        variant="fp16",
+        **_get_optional_variant_kwargs(
+            (
+                args.pretrained_model_name_or_path
+                if args.pretrain_unet is None
+                else args.pretrain_unet
+            ),
+            "unet",
+        ),
     )
     if "stable-video-diffusion" in args.pretrained_model_name_or_path:
         _replace_unet_conv_in_zero_init(

@@ -232,3 +232,4 @@ EvoWorld_backup
 evo_checkpoints
 # env config
 paths.env
+monitor_gpu_wecom.py
