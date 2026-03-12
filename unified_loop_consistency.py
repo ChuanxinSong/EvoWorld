@@ -161,11 +161,12 @@ class UnifiedLoopConsistencyPipeline:
     # ---------- Model init ----------
     def initialize_models(self) -> None:
         self.logger.info("Loading Navigator (UNet + SVD pipeline)...")
-        self.navigator = Navigator()
+        self.navigator = Navigator(height=self.args.height, width=self.args.width)
         self.navigator.get_pipeline(
             self.args.unet_path,
             self.args.svd_path,
-            model_height=DEFAULT_PANO_H,
+            model_width=self.args.width,
+            model_height=self.args.height,
             progress_bar=False,
             num_frames=self.args.num_frames,
         )
@@ -176,8 +177,8 @@ class UnifiedLoopConsistencyPipeline:
 
         self.logger.info("Initializing Equi2Pers...")
         self.equi2pers = Equi2Pers(
-            height=DEFAULT_PERS_H,
-            width=DEFAULT_PERS_W,
+            height=self.args.pers_height,
+            width=self.args.pers_width,
             fov_x=90,
             mode="bilinear",
         )
@@ -198,7 +199,7 @@ class UnifiedLoopConsistencyPipeline:
         pipeline.to(self.device)
         pipeline.set_progress_bar_config(disable=True)
 
-        rays = equirectangular_to_ray(target_H=DEFAULT_PANO_H // 8, target_W=DEFAULT_PANO_W // 8)
+        rays = equirectangular_to_ray(target_H=args.height // 8, target_W=args.width // 8)
         rays = torch.tensor(rays, dtype=weight_dtype, device=self.device)
 
         return pipeline, rays, weight_dtype
@@ -214,10 +215,6 @@ class UnifiedLoopConsistencyPipeline:
         return data_root, is_single_video
 
     def create_dataset_and_loader(self, data_root: str, is_single_video: bool):
-        # Set default dims
-        self.args.height = DEFAULT_PANO_H
-        self.args.width = DEFAULT_PANO_W
-
         sampling_method = "reprojection" if self.args.single_segment else "empty_with_traj"
         load_complete_episode = not self.args.single_segment
 
@@ -256,8 +253,8 @@ class UnifiedLoopConsistencyPipeline:
         generations = navigate_fn(
             current_path,
             start_image,
-            width=DEFAULT_PANO_W,
-            height=DEFAULT_PANO_H,
+            width=self.args.width,
+            height=self.args.height,
             num_inference_steps=25,
             memorized_images=memorized_images,
             infer_segment=True,
@@ -286,8 +283,8 @@ class UnifiedLoopConsistencyPipeline:
         generations = navigate_fn(
             current_path,
             start_image,
-            width=DEFAULT_PANO_W,
-            height=DEFAULT_PANO_H,
+            width=self.args.width,
+            height=self.args.height,
             num_inference_steps=25,
             memorized_images=memorized_images,
             infer_segment=True,
@@ -431,11 +428,16 @@ class UnifiedLoopConsistencyPipeline:
             # Save predicted frames (optional)
             if self.args.save_frames:
                 frames_path = os.path.join(episode_save_dir, f"predictions_{segment_id}")
+                # Segment>0 drops the duplicated boundary frame, so shift filenames by +1.
                 start_idx_seg = segment_id * (self.args.num_frames - 1)
+                if segment_id > 0:
+                    start_idx_seg += 1
                 save_frames(generated_frames, frames_path, start_idx_seg)
 
                 frames_gt_path = os.path.join(episode_save_dir, f"predictions_gt_{segment_id}")
                 gt_frames = batch["pixel_values"][0, start_idx:end_idx]
+                if segment_id > 0:
+                    gt_frames = gt_frames[1:]
                 save_frames(gt_frames, frames_gt_path, start_idx_seg)
 
             # For all but last segment: do reprojection + VGGT to build memories for next seg
@@ -561,6 +563,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--start_idx", type=int, default=0, help="Start index")
     parser.add_argument("--num_segments", type=int, default=3, help="Number of segments to process")
     parser.add_argument("--num_frames", type=int, default=25, help="Frames per segment")
+    parser.add_argument("--width", type=int, default=DEFAULT_PANO_W, help="Panorama width for dataset/model")
+    parser.add_argument("--height", type=int, default=DEFAULT_PANO_H, help="Panorama height for dataset/model")
+    parser.add_argument("--pers_width", type=int, default=DEFAULT_PERS_W, help="Perspective width for VGGT stage")
+    parser.add_argument("--pers_height", type=int, default=DEFAULT_PERS_H, help="Perspective height for VGGT stage")
     parser.add_argument("--save_frames", action="store_true", help="Save intermediate frames")
 
     # Options

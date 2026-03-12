@@ -51,7 +51,7 @@ class Navigator:
         self.step_size = step_size
         self.position_scale = position_scale
         self.generations = []
-        self.previous_images = torch.zeros(0,3,576,1024).to('cuda:0')
+        self.previous_images = torch.zeros(0, 3, height, width).to('cuda:0')
         self.previous_trajectoies = torch.tensor([]).to('cuda:0')
         self.current_pose = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
         self.rays = torch.tensor(equirectangular_to_ray(target_H=int(height/8), target_W=int(width/8))).to(torch.float32).to('cuda:0')
