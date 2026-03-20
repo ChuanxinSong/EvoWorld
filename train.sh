@@ -8,6 +8,7 @@
 # ======================================================================================
 # per gpu bsz=1, 不使用梯度检查点，分辨率1024*576，num_frames=10，占用显存55-56g
 # per gpu bsz=1, 使用梯度检查点，分辨率1024*576，num_frames=25，占用显存78-79g
+# per gpu bsz=1, 使用梯度检查点，分辨率1024*512，num_frames=25，占用显存66-67g
 # ======================================================================================
 
 
@@ -20,14 +21,14 @@ source paths.env
 REPROJ_NAME="rendered_panorama_vggt_open3d_camera_aligned_new_code"
 
 # GPU settings
-GPU_IDS="3" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
+GPU_IDS="3,4" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
 
 # configuration file, you can add more config files in the config folder
 # CONFIG_NAME="deepspeed_o1_4gpu"
 CONFIG_NAME="deepspeed_o2"
 
 # 指定主进程端口号（用于多进程通信）
-MASTER_PORT=49502
+MASTER_PORT=49402
 
 # global seed
 SEED=42
@@ -36,8 +37,8 @@ SEED=42
 # DATASET_NAME="Curve_Loop" # Coming Soon!
 DATASET_NAME="unity_curve"
 WIDTH=1024
-HEIGHT=576
-NUM_FRAMES=10
+HEIGHT=512
+NUM_FRAMES=25
 
 # model & trainer settings
 # PRETRAIN_MODEL="MODELS/stable-video-diffusion-img2vid-xt-1-1"
@@ -55,7 +56,7 @@ NUM_VALIDATION_IMAGES=1
 RESUME_FROM="latest"
 CURRENT_TIME=$(date +"%Y%m%d_%H%M%S")
 BATCH_SIZE_PER_GPU=1
-GRAD_ACCUM_STEP=16
+GRAD_ACCUM_STEP=8
 # GPUS_PER_NODE=$(nvidia-smi -L | wc -l) # 注释掉这行，防止覆盖你自定义的 GPU 数量
 GPUS_PER_NODE=$(echo $GPU_IDS | tr ',' '\n' | wc -l)
 WORLD_SIZE=$((GPUS_PER_NODE * GRAD_ACCUM_STEP * BATCH_SIZE_PER_GPU))
@@ -102,4 +103,5 @@ accelerate launch --config_file="config/${CONFIG_NAME}.yaml" \
     --num_validation_images=$NUM_VALIDATION_IMAGES \
     --add_plucker \
     --resume_from_checkpoint=$RESUME_FROM \
-    # --gradient_checkpointing
+    --no_validation \
+    --gradient_checkpointing

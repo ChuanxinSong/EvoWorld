@@ -8,9 +8,11 @@
 # ======================================================================================
 # 预训练模式：随机mask视频帧像素进行视频补全（不需要点云投影）
 # per gpu bsz=1, 不使用梯度检查点，分辨率1024*576，冻结空间层，num_frames=10，占用显存52-53g
+# per gpu bsz=1, 使用梯度检查点，分辨率1024*576，冻结空间层，num_frames=10，占用显存39-40g
 # per gpu bsz=1, 使用梯度检查点，分辨率1024*576，num_frames=25，占用显存78-79g
 
 # per gpu bsz=1, 不使用梯度检查点，分辨率1024*576，训练所有层，num_frames=6，占用显存54-55g; num_frames=8，占用显存69-70g; num_frames=9，占用显存73-74g; num_frames=10，爆显存。
+
 # ======================================================================================
 
 
@@ -37,18 +39,20 @@ SEED=42
 DATASET_NAME="unity_curve"
 WIDTH=1024
 HEIGHT=576
-NUM_FRAMES=6
+NUM_FRAMES=10
 
 # GPU settings
-GPU_IDS="4,5" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
+GPU_IDS="2" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
 
 BATCH_SIZE_PER_GPU=1
-GRAD_ACCUM_STEP=8
+GRAD_ACCUM_STEP=16
 
 # model & trainer settings
 # PRETRAIN_MODEL="MODELS/stable-video-diffusion-img2vid-xt-1-1"
 # 使用官方 HF ID，会自动寻找缓存
-PRETRAIN_MODEL="stabilityai/stable-video-diffusion-img2vid-xt-1-1" 
+# PRETRAIN_MODEL="stabilityai/stable-video-diffusion-img2vid-xt-1-1" 
+PRETRAIN_MODEL="/home/user/songcx/code/EvoWorld/evo_checkpoints/unity_curve-pretrain-deepspeed_o2-lr-1e-5-step-30000-worldsize-16-length-6" 
+
 STEP=30000
 SAVE_INTERVAL=5000
 LR="1e-5"
@@ -132,7 +136,7 @@ accelerate launch --config_file="config/${CONFIG_NAME}.yaml" \
     --patch_mask_ratio_max=$PATCH_MASK_RATIO_MAX \
     --pixel_mask_ratio_min=$PIXEL_MASK_RATIO_MIN \
     --pixel_mask_ratio_max=$PIXEL_MASK_RATIO_MAX \
-    \
-    --unfreeze_all \
-    # --no_validation \
+    --no_validation \
     # --gradient_checkpointing \
+    # \
+    # --unfreeze_all \
