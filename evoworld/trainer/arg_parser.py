@@ -284,6 +284,13 @@ def parse_args():
         help="Whether to denoise plucker embedding",
     )
     parser.add_argument("--reprojection_name", type=str, default="rendered_panorama")
+    parser.add_argument(
+        "--sampling_method",
+        type=str,
+        default="reprojection",
+        choices=["reprojection", "empty_with_traj"],
+        help="Memory sampling method used by CameraTrajDataset.",
+    )
 
     # Pretrain mode: random mask video inpainting (no reprojection needed)
     parser.add_argument(

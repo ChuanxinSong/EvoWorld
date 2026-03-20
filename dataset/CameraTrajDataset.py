@@ -344,6 +344,10 @@ class CameraTrajDataset(Dataset):
         episode_length = len(
             self.trajectories["raw_trajectories"][current_episode].keys()
         )
+        first_frame_id = 0 if self.id_zero_start else 1
+        sampled_initial_frame_idx = first_frame_id
+        initial_frame_traj = None
+        initial_frame_image = None
 
         if self.pretrain_mode:
             # Pretrain mode: random start + random stride sampling
@@ -352,30 +356,42 @@ class CameraTrajDataset(Dataset):
             current_traj = self._load_traj_by_ids(current_episode, frame_ids)
             # Generate masked GT frames as memorized_pixel_values
             memorized_images = self._random_mask_frames(current_images)
+            start_idx = frame_ids[0]
+            sampled_initial_frame_idx = frame_ids[0]
         else:
-            # Original mode: fixed segment + reprojection
-            valid_range_start_idx = (
-                episode_length - self.last_segment_length + 1
-                if not self.load_complete_episode
-                else 1
-            )
-            valid_range_start_idx = (
-                valid_range_start_idx - 1 if self.id_zero_start else valid_range_start_idx
-            )
-            valid_range_end_idx = episode_length - self.sequence_length
-            # Given the sequence length, retrieve a random sequence of frames from the episode
-            start_idx = valid_range_start_idx
-            end_idx = (
-                start_idx + self.sequence_length
-                if not self.load_complete_episode
-                else start_idx + episode_length
-            )
-            # load the images: [Seq C H W]
-            # print("start_idx: ",start_idx)
-            # print("end_idx: ",end_idx)
-            current_images = self.load_images(current_episode, start_idx, end_idx)
-            # load the camera trajectory: [Seq 6]: [x, y, z, rotx(along x) roty(along y) rotz(along z)]
-            current_traj = self.load_traj(current_episode, start_idx, end_idx)
+            if self.memory_sampling_args.get("sampling_method") == "empty_with_traj":
+                # Sample a random contiguous clip without using the episode's first
+                # frame as the start frame when possible.
+                frame_ids = self._sample_contiguous_frames(
+                    episode_length, exclude_episode_first_frame=True
+                )
+                current_images = self._load_images_by_ids(current_episode, frame_ids)
+                current_traj = self._load_traj_by_ids(current_episode, frame_ids)
+                start_idx = frame_ids[0]
+                sampled_initial_frame_idx = frame_ids[0]
+            else:
+                # Original mode: fixed segment + reprojection
+                valid_range_start_idx = (
+                    episode_length - self.last_segment_length + 1
+                    if not self.load_complete_episode
+                    else 1
+                )
+                valid_range_start_idx = (
+                    valid_range_start_idx - 1
+                    if self.id_zero_start
+                    else valid_range_start_idx
+                )
+                # Given the sequence length, retrieve a fixed sequence of frames from the episode
+                start_idx = valid_range_start_idx
+                end_idx = (
+                    start_idx + self.sequence_length
+                    if not self.load_complete_episode
+                    else start_idx + episode_length
+                )
+                # load the images: [Seq C H W]
+                current_images = self.load_images(current_episode, start_idx, end_idx)
+                # load the camera trajectory: [Seq 6]: [x, y, z, rotx(along x) roty(along y) rotz(along z)]
+                current_traj = self.load_traj(current_episode, start_idx, end_idx)
 
         # store the current trajectory for display
         self.current_trajectory = current_traj.clone()
@@ -408,9 +424,13 @@ class CameraTrajDataset(Dataset):
             memorized_traj = memories["traj"]
 
         if self.memory_sampling_args.get("include_initial_frame", False):
-            initial_frame_traj = self.load_traj(current_episode, 1, 2)
+            initial_frame_traj = self.load_traj(
+                current_episode, sampled_initial_frame_idx, sampled_initial_frame_idx + 1
+            )
             initial_frame_traj[:, :3] = initial_frame_traj[:, :3] * self.pos_scale
-            initial_frame_image = self.load_images(current_episode, 1, 2)
+            initial_frame_image = self.load_images(
+                current_episode, sampled_initial_frame_idx, sampled_initial_frame_idx + 1
+            )
         # print("loaded episode: ",current_episode)
         return {
             "pixel_values": current_images,
@@ -452,6 +472,38 @@ class CameraTrajDataset(Dataset):
 
         frame_ids = [start + i * stride for i in range(num_frames)]
         return frame_ids
+
+    def _sample_contiguous_frames(
+        self, episode_length, exclude_episode_first_frame=False
+    ):
+        """
+        Randomly sample a contiguous clip with stride 1.
+
+        Args:
+            episode_length: int, total number of frames in the episode
+            exclude_episode_first_frame: bool, avoid using the episode's first
+                frame as the sampled start frame when the episode is long enough.
+        Returns:
+            list[int]: list of contiguous frame indices
+        """
+        first_frame_id = 0 if self.id_zero_start else 1
+        last_frame_id = (episode_length - 1) if self.id_zero_start else episode_length
+        num_frames = self.sequence_length
+
+        max_start = last_frame_id - (num_frames - 1)
+        if max_start < first_frame_id:
+            raise ValueError(
+                f"Episode length {episode_length} is shorter than sequence length {num_frames}."
+            )
+
+        min_start = (
+            first_frame_id + 1
+            if exclude_episode_first_frame and max_start >= first_frame_id + 1
+            else first_frame_id
+        )
+        start = random.randint(min_start, max_start)
+
+        return [start + i for i in range(num_frames)]
 
     def _load_images_by_ids(self, episode, frame_ids):
         """
