@@ -68,6 +68,13 @@ CURRENT_TIME=$(date +"%Y%m%d_%H%M%S")
 # GPUS_PER_NODE=$(nvidia-smi -L | wc -l) # 注释掉这行，防止覆盖你自定义的 GPU 数量
 GPUS_PER_NODE=$(echo $GPU_IDS | tr ',' '\n' | wc -l)
 WORLD_SIZE=$((GPUS_PER_NODE * GRAD_ACCUM_STEP * BATCH_SIZE_PER_GPU))
+LAUNCH_CONFIG_NAME="$CONFIG_NAME"
+
+# accelerate_config.yaml is a MULTI_GPU config. For single-GPU runs, switch to
+# a dedicated single-process Accelerate config to avoid launch validation errors.
+if [ "$CONFIG_NAME" = "accelerate_config" ] && [ "$GPUS_PER_NODE" -eq 1 ]; then
+    LAUNCH_CONFIG_NAME="accelerate_single_gpu"
+fi
 
 # pretrain mode settings
 MASK_RATIO_MIN=0.3
@@ -90,13 +97,13 @@ PIXEL_MASK_RATIO_MAX=0.4
 # echo "Runing will be logged to WANDB project: $WANDB_PROJECT, entity: $WANDB_ENTITY, run name: $WANDB_RUN_NAME"
 
 # 在训练开始前，将脚本中定义的所有超参数和配置信息打印到终端上，方便检查和记录
-for var in CONFIG_NAME SEED DATASET_NAME WIDTH HEIGHT NUM_FRAMES PRETRAIN_MODEL STEP SAVE_INTERVAL GRAD_ACCUM_STEP LR LR_WARMUP_STEP LR_SCHEDULER WORLD_SIZE PRECISION VALIDATION_STEP NUM_VALIDATION_IMAGES RESUME_FROM MASK_RATIO_MIN MASK_RATIO_MAX STRIDE_MIN STRIDE_MAX PATCH_SIZE PATCH_MASK_RATIO_MIN PATCH_MASK_RATIO_MAX PIXEL_MASK_RATIO_MIN PIXEL_MASK_RATIO_MAX; do
+for var in CONFIG_NAME LAUNCH_CONFIG_NAME SEED DATASET_NAME WIDTH HEIGHT NUM_FRAMES PRETRAIN_MODEL STEP SAVE_INTERVAL GRAD_ACCUM_STEP LR LR_WARMUP_STEP LR_SCHEDULER WORLD_SIZE PRECISION VALIDATION_STEP NUM_VALIDATION_IMAGES RESUME_FROM MASK_RATIO_MIN MASK_RATIO_MAX STRIDE_MIN STRIDE_MAX PATCH_SIZE PATCH_MASK_RATIO_MIN PATCH_MASK_RATIO_MAX PIXEL_MASK_RATIO_MIN PIXEL_MASK_RATIO_MAX; do
     echo "$var: ${!var}"
 done
 
 echo "Current Env: $(conda info --envs | grep '*' | awk '{print $1}')"
 
-accelerate launch --config_file="config/${CONFIG_NAME}.yaml" \
+accelerate launch --config_file="config/${LAUNCH_CONFIG_NAME}.yaml" \
     --num_processes=$GPUS_PER_NODE \
     --gpu_ids=$GPU_IDS \
     --main_process_port=$MASTER_PORT \

@@ -274,6 +274,23 @@ def parse_args():
         help="Unfreeze all UNet parameters for full fine-tuning instead of only training selected layers.",
     )
     parser.add_argument(
+        "--use_lora",
+        action="store_true",
+        help="Enable LoRA fine-tuning on the UNet attention projections instead of full/partial UNet fine-tuning.",
+    )
+    parser.add_argument(
+        "--lora_rank",
+        type=int,
+        default=16,
+        help="LoRA rank.",
+    )
+    parser.add_argument(
+        "--lora_alpha",
+        type=int,
+        default=16,
+        help="LoRA alpha.",
+    )
+    parser.add_argument(
         "--add_plucker",
         action="store_true",
         help="Whether to add plucker embedding to the unet",

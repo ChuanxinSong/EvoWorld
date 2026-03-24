@@ -223,10 +223,12 @@ token.pickle
 scripts/upload_models_and_data
 # Custom ignores
 unity_curve/
+unity_curve_512/
 output_results/
 EvoWorld_backup/
 evo_checkpoints/
 unity_curve
+unity_curve_512
 output_results
 EvoWorld_backup
 evo_checkpoints

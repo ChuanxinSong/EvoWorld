@@ -44,6 +44,9 @@ from einops import rearrange
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from PIL import Image
+from peft import LoraConfig, get_peft_model, set_peft_model_state_dict
+from peft.peft_model import PeftModel
+from safetensors.torch import load_file as safe_load_file
 from torch.utils.data import RandomSampler
 from torchvision.transforms.functional import resize
 from tqdm.auto import tqdm
@@ -134,8 +137,33 @@ def _get_optional_variant_kwargs(model_root: str, subfolder: str) -> dict:
     return {"variant": "fp16"}
 
 
+def _load_peft_adapter_state_dict(adapter_dir: str) -> dict:
+    safetensors_path = os.path.join(adapter_dir, "adapter_model.safetensors")
+    bin_path = os.path.join(adapter_dir, "adapter_model.bin")
+
+    if os.path.exists(safetensors_path):
+        return safe_load_file(safetensors_path, device="cpu")
+    if os.path.exists(bin_path):
+        return torch.load(bin_path, map_location="cpu")
+
+    raise FileNotFoundError(f"No LoRA adapter weights found under {adapter_dir}")
+
+
+def _unwrap_unet_for_attr_access(model):
+    while hasattr(model, "module"):
+        model = model.module
+
+    if isinstance(model, PeftModel):
+        return model.get_base_model()
+
+    return model
+
+
 def main():
     args = parse_args()
+    if args.use_lora and args.use_ema:
+        raise ValueError("--use_lora is not supported together with --use_ema in this script.")
+
     loop_args = {
         "sampling_method": args.sampling_method,
         "num_memories": 1,
@@ -265,6 +293,20 @@ def main():
     image_encoder.requires_grad_(False)
     unet.requires_grad_(False)
 
+    if args.use_lora:
+        lora_config = LoraConfig(
+            r=args.lora_rank,
+            lora_alpha=args.lora_alpha,
+            target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+            modules_to_save=["conv_in"],
+        )
+        unet = get_peft_model(unet, lora_config)
+        logger.info(
+            "Enabled LoRA fine-tuning for target_modules=%s with modules_to_save=%s",
+            ["to_k", "to_q", "to_v", "to_out.0"],
+            ["conv_in"],
+        )
+
     unet.accelerator = accelerator
 
     # For mixed precision training we cast the text_encoder and vae weights to half-precision
@@ -297,7 +339,10 @@ def main():
                 ema_unet.save_pretrained(os.path.join(output_dir, "unet_ema"))
 
             for i, model in enumerate(models):
-                model.save_pretrained(os.path.join(output_dir, "unet"))
+                if args.use_lora:
+                    model.save_pretrained(os.path.join(output_dir, "unet_lora"))
+                else:
+                    model.save_pretrained(os.path.join(output_dir, "unet"))
                 if weights:  # Don't pop if empty
                     weights.pop()
 
@@ -315,14 +360,19 @@ def main():
                 # pop models so that they are not loaded again
                 model = models.pop()
 
-                # load diffusers style into model
-                load_model = UNetSpatioTemporalConditionModel.from_pretrained(
-                    input_dir, subfolder="unet"
-                )
-                model.register_to_config(**load_model.config)
+                if args.use_lora:
+                    adapter_dir = os.path.join(input_dir, "unet_lora")
+                    peft_state_dict = _load_peft_adapter_state_dict(adapter_dir)
+                    set_peft_model_state_dict(model, peft_state_dict, adapter_name="default")
+                else:
+                    # load diffusers style into model
+                    load_model = UNetSpatioTemporalConditionModel.from_pretrained(
+                        input_dir, subfolder="unet"
+                    )
+                    model.register_to_config(**load_model.config)
 
-                model.load_state_dict(load_model.state_dict())
-                del load_model
+                    model.load_state_dict(load_model.state_dict())
+                    del load_model
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
@@ -359,7 +409,11 @@ def main():
     parameters_list = []
 
     # Customize the parameters that need to be trained;
-    if args.unfreeze_all:
+    if args.use_lora:
+        for _, param in unet.named_parameters():
+            if param.requires_grad:
+                parameters_list.append(param)
+    elif args.unfreeze_all:
         # Full fine-tuning: unfreeze all UNet parameters
         for name, param in unet.named_parameters():
             param.requires_grad = True
@@ -377,7 +431,11 @@ def main():
                 param.requires_grad = True
             else:
                 param.requires_grad = False
-    logger.info(f"Trainable params num: {len(parameters_list)}")
+    trainable_params = sum(param.numel() for param in parameters_list)
+    total_params = sum(param.numel() for param in unet.parameters())
+    logger.info(
+        f"Trainable params tensors: {len(parameters_list)}, elements: {trainable_params}/{total_params}"
+    )
 
     optimizer = optimizer_cls(
         parameters_list,
@@ -537,16 +595,12 @@ def main():
         dtype,
         batch_size,
     ):
+        unet_for_attr = _unwrap_unet_for_attr_access(unet)
         add_time_ids = [fps, motion_bucket_id, noise_aug_strength]
-        if hasattr(unet, "module"):
-            passed_add_embed_dim = unet.module.config.addition_time_embed_dim * len(
-                add_time_ids
-            )
-        else:
-            passed_add_embed_dim = unet.config.addition_time_embed_dim * len(
-                add_time_ids
-            )
-        expected_add_embed_dim = unet.add_embedding.linear_1.in_features
+        passed_add_embed_dim = (
+            unet_for_attr.config.addition_time_embed_dim * len(add_time_ids)
+        )
+        expected_add_embed_dim = unet_for_attr.add_embedding.linear_1.in_features
 
         if expected_add_embed_dim != passed_add_embed_dim:
             raise ValueError(
@@ -890,13 +944,22 @@ def main():
                                     )
                                     shutil.rmtree(removing_checkpoint)
 
+                # Save before validation so a validation OOM does not drop the latest train step.
+                # DeepSpeed Model and Optimizer will take a long time if we do it in main process.
+                if global_step % args.checkpointing_steps == 0:
+                    save_path = os.path.join(
+                        args.output_dir, f"checkpoint-{global_step}"
+                    )
+                    accelerator.save_state(save_path)
+                    logger.info(f"Saved state to {save_path}")
+
                 # sample images!
                 if (
                     not args.no_validation
                     and ((global_step % args.validation_steps == 0) or (global_step == 1))
                 ):
                     # All processes release training cache before validation to prevent OOM.
-                    torch.cuda.empty_cache()
+                    # torch.cuda.empty_cache()
 
                     # All processes must participate in unwrap_model to allow ZeRO parameter gathering.
                     # Only rank 0 will actually run inference, but all ranks must call unwrap_model together.
@@ -1014,19 +1077,10 @@ def main():
                             ema_unet.restore(unet.parameters())
 
                         del pipeline
-                        torch.cuda.empty_cache()
+                        # torch.cuda.empty_cache()
 
                     # All processes wait for main process to finish validation before continuing training.
                     accelerator.wait_for_everyone()
-
-                # save checkpoints!
-                # DeepSpeed Model and Optimizer will take a long time if we do it in main process
-                if global_step % args.checkpointing_steps == 0:
-                    save_path = os.path.join(
-                        args.output_dir, f"checkpoint-{global_step}"
-                    )
-                    accelerator.save_state(save_path)
-                    logger.info(f"Saved state to {save_path}")
 
             logs = {
                 "step_loss": loss.detach().item(),
@@ -1043,6 +1097,19 @@ def main():
         unet = accelerator.unwrap_model(unet)
         if args.use_ema:
             ema_unet.copy_to(unet.parameters())
+
+        if args.use_lora and isinstance(unet, PeftModel):
+            unet.save_pretrained(os.path.join(args.output_dir, "unet_lora"))
+            logger.info(
+                "Saved LoRA adapter to %s",
+                os.path.join(args.output_dir, "unet_lora"),
+            )
+            # Keep the separately saved adapter, but export the final pipeline with
+            # both the trained conv_in and LoRA merged into a plain UNet.
+            unet = unet.merge_and_unload()
+            logger.info(
+                "Merged LoRA adapter into UNet for pipeline export so trained conv_in is preserved."
+            )
 
         pipeline = StableVideoDiffusionPipeline.from_pretrained(
             args.pretrained_model_name_or_path,
