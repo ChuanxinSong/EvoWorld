@@ -233,3 +233,6 @@ evo_checkpoints
 # env config
 paths.env
 monitor_gpu_wecom.py
+
+equi_rotate_results/
+001.png
