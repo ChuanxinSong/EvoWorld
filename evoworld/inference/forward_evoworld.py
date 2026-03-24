@@ -38,6 +38,13 @@ def parse_arguments():
     parser.add_argument(
         "--reprojection_name", type=str, default="rendered_panorama_vggt_open3d"
     )
+    parser.add_argument(
+        "--sampling_method",
+        type=str,
+        default="reprojection",
+        choices=["reprojection", "empty_with_traj"],
+        help="Memory sampling method used by CameraTrajDataset during inference.",
+    )
     parser.add_argument("--output_name", type=str, default="eval_add_mem")
     parser.add_argument("--seed", default=42, type=int)
     return parser.parse_args()
@@ -220,7 +227,7 @@ def main():
 
     # Configuration
     loop_args = {
-        "sampling_method": "reprojection",
+        "sampling_method": args.sampling_method,
         "include_initial_frame": True,
     }
 
