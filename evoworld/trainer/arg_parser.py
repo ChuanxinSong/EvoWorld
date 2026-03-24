@@ -308,6 +308,15 @@ def parse_args():
         choices=["reprojection", "empty_with_traj"],
         help="Memory sampling method used by CameraTrajDataset.",
     )
+    parser.add_argument(
+        "--only_position",
+        action="store_true",
+        help=(
+            "Load aligned_to_first panoramas/poses, keep only position changes in "
+            "camera trajectories, and online-rotate each sampled clip to its first "
+            "frame's original pose."
+        ),
+    )
 
     # Pretrain mode: random mask video inpainting (no reprojection needed)
     parser.add_argument(

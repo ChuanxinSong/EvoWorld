@@ -334,7 +334,7 @@ def rotate_equirect(
     Args:
         img: np.ndarray or torch.Tensor
             shape:
-                numpy: (H,W,C) or (C,H,W)
+                numpy: (H,W,C), (C,H,W), (B,H,W,C) or (B,C,H,W)
                 torch: (C,H,W) or (B,C,H,W)
         yaw_deg, pitch_deg, roll_deg: rotation in degrees
         mode: interpolation mode ("bilinear" recommended)
@@ -354,6 +354,7 @@ def rotate_equirect(
 
     # ---------- 统一 shape ----------
     added_batch = False
+    original_was_batched = img_np.ndim == 4
 
     if img_np.ndim == 3:
         # (H,W,C) → (C,H,W)
@@ -386,6 +387,9 @@ def rotate_equirect(
     )
 
     # ---------- 恢复 shape ----------
+    if original_was_batched and out.ndim == 3:
+        out = out[None]
+
     if added_batch:
         out = out[0]
 

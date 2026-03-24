@@ -467,6 +467,7 @@ def main():
         patch_mask_ratio_max=args.patch_mask_ratio_max,
         pixel_mask_ratio_min=args.pixel_mask_ratio_min,
         pixel_mask_ratio_max=args.pixel_mask_ratio_max,
+        only_position=args.only_position,
     )
 
     val_dataset = None
@@ -491,6 +492,7 @@ def main():
             patch_mask_ratio_max=args.patch_mask_ratio_max,
             pixel_mask_ratio_min=args.pixel_mask_ratio_min,
             pixel_mask_ratio_max=args.pixel_mask_ratio_max,
+            only_position=args.only_position,
         )
 
     sampler = RandomSampler(train_dataset)
@@ -711,6 +713,7 @@ def main():
                     .to(accelerator.device, non_blocking=True)
                 )
                 for i in range(camera_traj_raw.shape[0]):
+                    # import pdb; pdb.set_trace()
                     camera_traj[i] = xyz_euler_to_three_by_four_matrix_batch(
                         camera_traj_raw[i], relative=True
                     )  # Step, 3, 4

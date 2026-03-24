@@ -2,6 +2,7 @@ import json
 import os
 import random
 
+import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
@@ -14,6 +15,7 @@ except:
 
 import logging
 
+from conver_equi_cube import rotate_equirect
 from utils.constant import UNITY_TO_OPENCV
 
 # Set up the logger
@@ -37,6 +39,10 @@ MEMORY_SAMPLING_ARGS = {
     "sampling_method": "reprojection",
     "include_initial_frame": True,
 }
+
+DEFAULT_TRAJ_CACHE_FILE = "camera_trajectories.json"
+ALIGNED_TRAJ_CACHE_FILE = "camera_trajectories_aligned_to_first.json"
+RAW_TRAJ_CACHE_FILE = "camera_trajectories_raw.json"
 
 
 class CustomRescale:
@@ -156,7 +162,37 @@ def load_camera_poses_from_txt(file_path):
     return camera_poses
 
 
-def build_traj_file_from_raw_info(root, episodes):
+def get_episode_pose_file(root, episode, only_position=False, raw=False):
+    if raw or not only_position:
+        return os.path.join(root, episode, "camera_poses.txt")
+    return os.path.join(root, episode, "aligned_to_first", "camera_poses.txt")
+
+
+def get_episode_panorama_dir(root, episode, only_position=False):
+    if only_position:
+        return os.path.join(root, episode, "aligned_to_first", "panorama")
+    return os.path.join(root, episode, "panorama")
+
+
+def to_uint8_image_array(img):
+    img = np.asarray(img)
+    if img.dtype == np.uint8:
+        return img
+
+    if np.issubdtype(img.dtype, np.floating):
+        max_value = float(np.nanmax(img)) if img.size else 0.0
+        if max_value <= 1.0:
+            img = img * 255.0
+
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def build_traj_file_from_raw_info(
+    root,
+    episodes,
+    pose_file_resolver=None,
+    cache_name=DEFAULT_TRAJ_CACHE_FILE,
+):
     """
     Load camera trajectories from a JSON file.
 
@@ -167,7 +203,10 @@ def build_traj_file_from_raw_info(root, episodes):
     Returns:
         dict: A two-layered dictionary where the key is episode name (str) and frame_id, the value is a dictionary of camera poses.
     """
-    traj_file_path = os.path.join(root, "camera_trajectories.json")
+    traj_file_path = os.path.join(root, cache_name)
+    pose_file_resolver = pose_file_resolver or (
+        lambda root_dir, episode_name: get_episode_pose_file(root_dir, episode_name)
+    )
 
     # Fast path: load from cache if it already exists and covers all episodes
     if os.path.exists(traj_file_path):
@@ -175,20 +214,18 @@ def build_traj_file_from_raw_info(root, episodes):
             cached = json.load(f)
         if all(ep in cached for ep in episodes):
             logger.info(
-                f"Loaded cached camera_trajectories.json from {traj_file_path} "
+                f"Loaded cached {cache_name} from {traj_file_path} "
                 f"({len(episodes)} episodes)."
             )
             return cached
         logger.info(
-            "Cached camera_trajectories.json is incomplete; rebuilding..."
+            f"Cached {cache_name} is incomplete; rebuilding..."
         )
 
     # Slow path: read every camera_poses.txt and write the cache
     camera_poses = {}
     for episode in episodes:
-        camera_poses[episode] = load_camera_poses_from_txt(
-            os.path.join(root, episode, "camera_poses.txt")
-        )
+        camera_poses[episode] = load_camera_poses_from_txt(pose_file_resolver(root, episode))
 
     with open(traj_file_path, "w") as traj_file:
         json.dump(camera_poses, traj_file, indent=4)
@@ -252,6 +289,7 @@ class CameraTrajDataset(Dataset):
         patch_mask_ratio_max=0.6,
         pixel_mask_ratio_min=0.1,
         pixel_mask_ratio_max=0.4,
+        only_position=False,
     ):
         """
         Args:
@@ -281,6 +319,7 @@ class CameraTrajDataset(Dataset):
         self.patch_mask_ratio_max = patch_mask_ratio_max
         self.pixel_mask_ratio_min = pixel_mask_ratio_min
         self.pixel_mask_ratio_max = pixel_mask_ratio_max
+        self.only_position = only_position
 
         # detect all episodes
         self.episodes = []
@@ -297,14 +336,40 @@ class CameraTrajDataset(Dataset):
         self.height = height
         self.width = width
         self.last_segment_length = last_segment_length
+        self.raw_trajectories = None
 
         if trajectory_file is None:
-            trajectories = build_traj_file_from_raw_info(self.root, self.episodes)
+            main_cache_name = (
+                ALIGNED_TRAJ_CACHE_FILE if self.only_position else DEFAULT_TRAJ_CACHE_FILE
+            )
+            trajectories = build_traj_file_from_raw_info(
+                self.root,
+                self.episodes,
+                pose_file_resolver=lambda root_dir, episode_name: get_episode_pose_file(
+                    root_dir,
+                    episode_name,
+                    only_position=self.only_position,
+                ),
+                cache_name=main_cache_name,
+            )
         else:
             trajectories = load_trajectory_file(trajectory_file)
 
         # convert camera poses to OpenCV coordinate system
         trajectories = self.convert_to_opencv_rdf(trajectories)
+
+        if self.only_position:
+            raw_trajectories = build_traj_file_from_raw_info(
+                self.root,
+                self.episodes,
+                pose_file_resolver=lambda root_dir, episode_name: get_episode_pose_file(
+                    root_dir,
+                    episode_name,
+                    raw=True,
+                ),
+                cache_name=RAW_TRAJ_CACHE_FILE,
+            )
+            self.raw_trajectories = self.convert_to_opencv_rdf(raw_trajectories)
 
         # load camera trajectories by aggregating all episodes
         self.trajectories = self.build_traj_map(trajectories)
@@ -505,6 +570,75 @@ class CameraTrajDataset(Dataset):
 
         return [start + i for i in range(num_frames)]
 
+    def _get_image_path(self, episode, frame_id):
+        panorama_dir = get_episode_panorama_dir(
+            self.root, episode, only_position=self.only_position
+        )
+        image_name = self.image_name_prefix + f"{frame_id:03}.png"
+        image_path = os.path.join(panorama_dir, image_name)
+        if os.path.exists(image_path):
+            return image_path
+        raise FileNotFoundError(
+            f"Image for frame {frame_id} not found under {panorama_dir}"
+        )
+
+    def _get_only_position_rotation_delta(self, episode, reference_frame_id):
+        if not self.only_position:
+            return 0.0, 0.0, 0.0
+
+        frame_key = str(reference_frame_id)
+        aligned_reference_pose = self.trajectories["raw_trajectories"][episode][frame_key]
+        raw_reference_pose = self.raw_trajectories[episode][frame_key]
+
+        yaw_deg = aligned_reference_pose[4] - raw_reference_pose[4]
+        pitch_deg = aligned_reference_pose[3] - raw_reference_pose[3]
+        roll_deg = aligned_reference_pose[5] - raw_reference_pose[5]
+        return yaw_deg, pitch_deg, roll_deg
+
+    def _load_images_for_frame_ids(self, episode, frame_ids, reference_frame_id=None):
+        if self.no_images:
+            images = torch.zeros(len(frame_ids), 3, self.height, self.width)
+            return images if len(frame_ids) > 1 else images[0]
+
+        if not frame_ids:
+            raise ValueError("frame_ids must not be empty.")
+
+        reference_frame_id = (
+            frame_ids[0] if reference_frame_id is None else reference_frame_id
+        )
+        yaw_deg, pitch_deg, roll_deg = self._get_only_position_rotation_delta(
+            episode, reference_frame_id
+        )
+
+        if self.only_position:
+            image_batch = []
+            for frame_id in frame_ids:
+                image_path = self._get_image_path(episode, frame_id)
+                with Image.open(image_path) as image:
+                    image_batch.append(np.array(image.convert("RGB")))
+
+            rotated_batch = rotate_equirect(
+                np.stack(image_batch, axis=0),
+                yaw_deg=yaw_deg,
+                pitch_deg=pitch_deg,
+                roll_deg=roll_deg,
+                mode="bilinear",
+            )
+            images = [
+                self.transform(Image.fromarray(to_uint8_image_array(rotated_image)))
+                for rotated_image in rotated_batch
+            ]
+        else:
+            images = []
+            for frame_id in frame_ids:
+                image_path = self._get_image_path(episode, frame_id)
+                with Image.open(image_path) as image:
+                    current_image = image.convert("RGB")
+                    current_image = self.transform(current_image)
+                images.append(current_image)
+
+        return torch.stack(images) if len(images) > 1 else images[0]
+
     def _load_images_by_ids(self, episode, frame_ids):
         """
         Load images by a list of frame indices.
@@ -514,19 +648,7 @@ class CameraTrajDataset(Dataset):
         Returns:
             torch.Tensor: [Seq C H W]
         """
-        if self.no_images:
-            return torch.zeros(len(frame_ids), 3, self.height, self.width)
-        images = []
-        for fid in frame_ids:
-            image_name = self.image_name_prefix + f"{fid:03}.png"
-            images_path = os.path.join(self.root, episode, "panorama", image_name)
-            if not os.path.exists(images_path):
-                image_name = self.image_name_prefix + f"{fid:03}.jpg"
-                images_path = os.path.join(self.root, episode, "panorama", image_name)
-            cur_images = Image.open(images_path).convert("RGB")
-            cur_images = self.transform(cur_images)
-            images.append(cur_images)
-        return torch.stack(images)
+        return self._load_images_for_frame_ids(episode, frame_ids)
 
     def _load_traj_by_ids(self, episode, frame_ids):
         """
@@ -666,24 +788,8 @@ class CameraTrajDataset(Dataset):
         Returns:
             torch.Tensor: [Seq C H W]
         """
-        if self.no_images:
-            images = torch.zeros(end_idx - start_idx, 3, self.height, self.width)
-            return images
-        images = []
-        #  load image from episode
-        for i in range(start_idx, end_idx):
-            image_name = self.image_name_prefix + f"{i:03}.png"
-            images_path = os.path.join(self.root, episode, "panorama", image_name)
-            if not os.path.exists(images_path):
-                print(f"File '{images_path}' not found, try find jpg.")
-                image_name = self.image_name_prefix + f"{i:03}.jpg"
-                images_path = os.path.join(self.root, episode, "panorama", image_name)
-            cur_images = Image.open(images_path)
-            cur_images = cur_images.convert("RGB")
-            cur_images = self.transform(cur_images)
-            images.append(cur_images)
-
-        return torch.stack(images) if len(images) > 1 else images[0]
+        frame_ids = list(range(start_idx, end_idx))
+        return self._load_images_for_frame_ids(episode, frame_ids)
 
     def load_reprojection(self, episode):
         """
