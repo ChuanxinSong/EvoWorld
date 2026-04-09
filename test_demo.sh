@@ -11,6 +11,7 @@ python -m evoworld.inference.forward_evoworld \
     --width $W \
     --height $H \
     --verbose \
+    --sampling_method reprojection \
     --reprojection_name rendered_panorama_vggt_open3d \
     --output_name demo
 

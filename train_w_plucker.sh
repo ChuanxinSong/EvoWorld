@@ -22,17 +22,18 @@ source paths.env
 REPROJ_NAME="rendered_panorama_vggt_open3d_camera_aligned_new_code"
 
 # GPU settings
-GPU_IDS="2" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
+GPU_IDS="3" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
 
 # configuration file, you can add more config files in the config folder
 # CONFIG_NAME="deepspeed_o1_4gpu"
 CONFIG_NAME="deepspeed_o2" # accelerate_config  deepspeed_o2
 
 # 指定主进程端口号（用于多进程通信）
-MASTER_PORT=47206
+MASTER_PORT=47216
 
 Sampling_Method="empty_with_traj" # "empty_with_traj" or "reprojection"
-ONLY_POSITION=1
+ONLY_POSITION=0
+USE_LORA=1
 
 # global seed
 SEED=42
@@ -66,9 +67,14 @@ GPUS_PER_NODE=$(echo $GPU_IDS | tr ',' '\n' | wc -l)
 WORLD_SIZE=$((GPUS_PER_NODE * GRAD_ACCUM_STEP * BATCH_SIZE_PER_GPU))
 LAUNCH_CONFIG_NAME="$CONFIG_NAME"
 RUN_SUFFIX=""
+LORA_DIR_TAG=""
+
+if [ "$USE_LORA" -eq 1 ]; then
+    LORA_DIR_TAG="-lora"
+fi
 
 if [ "$ONLY_POSITION" -eq 1 ]; then
-    RUN_SUFFIX="-only-position"
+    RUN_SUFFIX="${RUN_SUFFIX}-only-position"
 fi
 
 # accelerate_config.yaml is a MULTI_GPU config. For single-GPU runs, switch to
@@ -89,12 +95,17 @@ for var in CONFIG_NAME LAUNCH_CONFIG_NAME SEED DATASET_NAME WIDTH HEIGHT NUM_FRA
     echo "$var: ${!var}"
 done
 echo "ONLY_POSITION: $ONLY_POSITION"
+echo "USE_LORA: $USE_LORA"
 
 echo "Current Env: $(conda info --envs | grep '*' | awk '{print $1}')"
 
 EXTRA_ARGS=()
 if [ "$ONLY_POSITION" -eq 1 ]; then
     EXTRA_ARGS+=(--only_position)
+fi
+
+if [ "$USE_LORA" -eq 1 ]; then
+    EXTRA_ARGS+=(--use_lora)
 fi
 
 accelerate launch --config_file="config/${LAUNCH_CONFIG_NAME}.yaml" \
@@ -108,8 +119,8 @@ accelerate launch --config_file="config/${LAUNCH_CONFIG_NAME}.yaml" \
     --num_frames=$NUM_FRAMES \
     --width=$WIDTH \
     --height=$HEIGHT \
-    --output_dir="$OUTPUT_ROOT/$DATASET_NAME-OnlyPlucker-lora-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES$RUN_SUFFIX" \
-    --logging_dir="$OUTPUT_ROOT/$DATASET_NAME-OnlyPlucker-lora-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES$RUN_SUFFIX/logs" \
+    --output_dir="$OUTPUT_ROOT/$DATASET_NAME-OnlyPlucker${LORA_DIR_TAG}-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES$RUN_SUFFIX" \
+    --logging_dir="$OUTPUT_ROOT/$DATASET_NAME-OnlyPlucker${LORA_DIR_TAG}-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES$RUN_SUFFIX/logs" \
     --per_gpu_batch_size=$BATCH_SIZE_PER_GPU \
     --gradient_accumulation_steps=$GRAD_ACCUM_STEP \
     --max_train_steps=$STEP \
@@ -128,6 +139,5 @@ accelerate launch --config_file="config/${LAUNCH_CONFIG_NAME}.yaml" \
     --sampling_method $Sampling_Method \
     --resume_from_checkpoint=$RESUME_FROM \
     --gradient_checkpointing \
-    --use_lora \
     "${EXTRA_ARGS[@]}"
     # --no_validation

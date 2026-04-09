@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Unified Loop Consistency Pipeline Runner
-# This script runs the unified pipeline that combines generation and reconstruction
+# Plucker-only single-segment runner
+# Inference matches empty_with_traj training: first frame + plucker + zero memory
 
 export CUDA_VISIBLE_DEVICES=2
 
@@ -16,19 +16,20 @@ CKPT=/data1/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Cur
 # CKPT=/data3/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93
 BASE_FOLDER=example/case_000
 OUTPUT_ROOT=output_results
-SAVE_DIR=$OUTPUT_ROOT/$(basename $CKPT)/unified_single_demo
+SAVE_DIR=$OUTPUT_ROOT/$(basename $CKPT)/plucker_only_single_demo
 START_IDX=0
 NUM_DATA_PER_GPU=1
 NUM_SEGMENTS=3
 CURVE_PATH=true
 
-echo "Running unified loop consistency pipeline..."
+echo "Running plucker-only single-segment pipeline..."
+echo "Mode: empty_with_traj + first frame + plucker embedding + zero memory"
 echo "Checkpoint: $CKPT"
 echo "Base folder: $BASE_FOLDER"
 echo "Save dir: $SAVE_DIR"
 echo "Number of segments: $NUM_SEGMENTS"
 
-CMD="python unified_loop_consistency.py \
+CMD="python unified_loop_consistency_only_plucker.py \
     --unet_path $CKPT \
     --svd_path $CKPT \
     --width $WIDTH \
@@ -49,4 +50,4 @@ fi
 echo "Command: $CMD"
 eval $CMD
 
-echo "Unified pipeline completed!"
+echo "Plucker-only single-segment pipeline completed!"
