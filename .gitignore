@@ -226,6 +226,8 @@ unity_curve/
 output_results/
 EvoWorld_backup/
 evo_checkpoints/
+equi_rotate_results/
+unity_curve_512
 unity_curve
 output_results
 EvoWorld_backup
