@@ -46,10 +46,11 @@ def tensor_to_Image(tensor):
 
 
 class Navigator:
-    def __init__(self, step_size=0.4,height=576,width=1024,position_scale=0.1):
+    def __init__(self, step_size=0.4,height=576,width=1024,position_scale=0.1, decode_chunk_size=8):
         self.logger = logging.getLogger(self.__class__.__name__)
         self.step_size = step_size
         self.position_scale = position_scale
+        self.decode_chunk_size = decode_chunk_size
         self.generations = []
         self.previous_images = torch.zeros(0, 3, height, width).to('cuda:0')
         self.previous_trajectoies = torch.tensor([]).to('cuda:0')
@@ -174,7 +175,7 @@ class Navigator:
                     segment=None, num_model_frames=25, 
                     width=None, height=None, fps=None, 
                     num_inference_steps=50, noise_aug_strength=0.02,
-                    use_memory=False):
+                    use_memory=False, decode_chunk_size=None):
         if image is None:
             image = self.generations[-1][-1]
 
@@ -182,6 +183,7 @@ class Navigator:
         model_height = self.model_height if self.model_height else width
         width = image.size(2) if not width else width
         height = image.size(1) if not height else height
+        decode_chunk_size = self.decode_chunk_size if decode_chunk_size is None else decode_chunk_size
         # image = self.transform(image).unsqueeze(0)
         num_frames = len(segment)
         if num_frames < num_model_frames:
@@ -202,7 +204,7 @@ class Navigator:
                                num_frames=self.num_frames,
                                width=model_width,
                                height=model_height,
-                               decode_chunk_size=8, 
+                               decode_chunk_size=decode_chunk_size, 
                                generator=generator, 
                                motion_bucket_id=127, 
                                fps=self.fps, 

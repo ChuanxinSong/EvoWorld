@@ -310,9 +310,18 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
         device: Union[str, torch.device],
         num_videos_per_prompt: int,
         do_classifier_free_guidance: bool,
+        encode_chunk_size: Optional[int] = None,
     ):
         image = image.to(device=device)
-        image_latents = self.vae.encode(image).latent_dist.mode()
+
+        if encode_chunk_size is None or encode_chunk_size <= 0:
+            encode_chunk_size = image.shape[0]
+
+        image_latents = []
+        for i in range(0, image.shape[0], encode_chunk_size):
+            image_chunk = image[i : i + encode_chunk_size]
+            image_latents.append(self.vae.encode(image_chunk).latent_dist.mode())
+        image_latents = torch.cat(image_latents, dim=0)
 
         # duplicate image_latents for each generation per prompt, using mps friendly method
         image_latents = image_latents.repeat(num_videos_per_prompt, 1, 1, 1)
@@ -467,6 +476,7 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
         motion_bucket_id: int = 127,
         noise_aug_strength: float = 0.02,
         decode_chunk_size: Optional[int] = None,
+        encode_chunk_size: Optional[int] = None,
         num_videos_per_prompt: Optional[int] = 1,
         generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
         latents: Optional[torch.Tensor] = None,
@@ -519,6 +529,9 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
                 The number of frames to decode at a time. Higher chunk size leads to better temporal consistency at the
                 expense of more memory usage. By default, the decoder decodes all frames at once for maximal quality.
                 For lower memory usage, reduce `decode_chunk_size`.
+            encode_chunk_size (`int`, *optional*):
+                The number of conditioning images to VAE-encode at a time. By default, it follows
+                `decode_chunk_size` when provided, otherwise all conditioning images are encoded at once.
             num_videos_per_prompt (`int`, *optional*, defaults to 1):
                 The number of videos to generate per prompt.
             generator (`torch.Generator` or `List[torch.Generator]`, *optional*):
@@ -563,6 +576,7 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
 
         num_frames = num_frames if num_frames is not None else self.unet.config.num_frames
         decode_chunk_size = decode_chunk_size if decode_chunk_size is not None else num_frames
+        encode_chunk_size = encode_chunk_size if encode_chunk_size is not None else decode_chunk_size
 
         
         # 1. Check inputs. Raise error if not correct
@@ -612,6 +626,7 @@ class StableVideoDiffusionPipeline(DiffusionPipeline):
             device=device,
             num_videos_per_prompt=num_videos_per_prompt,
             do_classifier_free_guidance=self.do_classifier_free_guidance,
+            encode_chunk_size=encode_chunk_size,
         )
         image_latents = image_latents.to(image_embeddings.dtype)
         image_latents = einops.rearrange(image_latents, "(b f) c h w -> b f c h w", f=num_cond)  # [1, f, 4, h, w]

@@ -1,15 +1,19 @@
 import argparse
 import os
 import sys
-from typing import Tuple
+from typing import List, Tuple
 
 import numpy as np
 import torch
 from PIL import Image
 from tqdm import tqdm
 
-from dataset.CameraTrajDataset import (CameraTrajDataset,
-                                       xyz_euler_to_three_by_four_matrix_batch)
+from conver_equi_cube import rotate_equirect
+from dataset.CameraTrajDataset import (
+    CameraTrajDataset,
+    load_camera_poses_from_txt,
+    xyz_euler_to_three_by_four_matrix_batch,
+)
 from evoworld.pipeline.pipeline_evoworld import StableVideoDiffusionPipeline
 from evoworld.trainer.unet_plucker import UNetSpatioTemporalConditionModel
 from utils.plucker_embedding import equirectangular_to_ray, ray_c2w_to_plucker
@@ -35,6 +39,12 @@ def parse_arguments():
     )
     parser.add_argument("--mask_mem", action="store_true")
     parser.add_argument("--num_frames", default=25, type=int)
+    parser.add_argument(
+        "--decode_chunk_size",
+        type=int,
+        default=8,
+        help="VAE decode chunk size. Set to a smaller value to reduce memory usage.",
+    )
     parser.add_argument(
         "--reprojection_name", type=str, default="rendered_panorama_vggt_open3d"
     )
@@ -164,30 +174,106 @@ def prepare_batch_data(batch, args, rays, weight_dtype):
 
 
 def save_frames(video_frames, gt_frames, frames_path: str, frames_gt_path: str, num_frames: int):
-    """Save predicted and ground truth frames to disk."""
+    """Save predicted, ground truth, and side-by-side comparison frames to disk."""
     os.makedirs(frames_path, exist_ok=True)
     os.makedirs(frames_gt_path, exist_ok=True)
+    frames_cmp_path = frames_path.replace("predictions", "predictions_compare")
+    os.makedirs(frames_cmp_path, exist_ok=True)
 
     assert (
         len(video_frames) == num_frames
     ), f"video frames {len(video_frames)} should equal num_frames {num_frames}!"
 
-    for i in range(num_frames):
-        frame = video_frames[i]
-        gt_frame = gt_frames[i]
+    def _to_pil(frame):
+        if isinstance(frame, Image.Image):
+            return frame
+        if isinstance(frame, torch.Tensor):
+            frame = frame * 0.5 + 0.5
+            frame = Image.fromarray(
+                frame.mul(255).byte().detach().cpu().numpy().transpose(1, 2, 0)
+            )
+            return frame
+        raise TypeError(f"Unsupported frame type: {type(frame)}")
 
-        # Convert ground truth frame to PIL
-        gt_frame = gt_frame * 0.5 + 0.5
-        gt_frame = Image.fromarray(
-            gt_frame.mul(255).byte().detach().cpu().numpy().transpose(1, 2, 0)
-        )
+    for i in range(num_frames):
+        frame = _to_pil(video_frames[i])
+        gt_frame = _to_pil(gt_frames[i])
+        if gt_frame.size != frame.size:
+            gt_frame = gt_frame.resize(frame.size, Image.BICUBIC)
+        comparison = Image.new("RGB", (frame.width, frame.height + gt_frame.height))
+        comparison.paste(frame, (0, 0))
+        comparison.paste(gt_frame, (0, frame.height))
 
         # Save frames
         frame.save(os.path.join(frames_path, f"{i+1:03}.png"))
         gt_frame.save(os.path.join(frames_gt_path, f"{i+1:03}.png"))
+        comparison.save(os.path.join(frames_cmp_path, f"{i+1:03}.png"))
 
 
-def process_batch(batch, args, pipeline, rays, weight_dtype, output_path: str, episode: str):
+def _extract_episode_path(batch) -> str:
+    episode_path = batch["episode_path"]
+    if isinstance(episode_path, (list, tuple)):
+        return episode_path[0]
+    return episode_path
+
+
+def _extract_frame_ids(batch) -> List[int]:
+    frame_ids = batch["frame_ids"]
+    if isinstance(frame_ids, torch.Tensor):
+        if frame_ids.ndim == 2:
+            frame_ids = frame_ids[0]
+        return [int(x) for x in frame_ids.tolist()]
+    return [int(x) for x in frame_ids]
+
+
+def _load_raw_gt_frames(episode_path: str, frame_ids: List[int]) -> List[Image.Image]:
+    gt_frames = []
+    for frame_id in frame_ids:
+        frame_path = os.path.join(episode_path, "panorama", f"{frame_id:03}.png")
+        gt_frames.append(Image.open(frame_path).convert("RGB"))
+    return gt_frames
+
+
+def _recover_only_position_predictions(video_frames, frame_ids: List[int], episode_path: str) -> List[Image.Image]:
+    raw_poses = load_camera_poses_from_txt(os.path.join(episode_path, "camera_poses.txt"))
+    aligned_poses = load_camera_poses_from_txt(
+        os.path.join(episode_path, "aligned_to_first", "camera_poses.txt")
+    )
+
+    recovered_frames = []
+    # import pdb; pdb.set_trace()
+    for frame, frame_id in zip(video_frames, frame_ids):
+        frame_key = str(frame_id)
+        raw_pose = raw_poses[frame_key]
+        aligned_pose = aligned_poses[frame_key]
+
+        yaw_deg = raw_pose[4] - aligned_pose[4]
+        pitch_deg = raw_pose[3] - aligned_pose[3]
+        roll_deg = raw_pose[5] - aligned_pose[5]
+
+        frame_np = np.array(frame.convert("RGB"))
+        recovered_np = rotate_equirect(
+            frame_np,
+            yaw_deg=yaw_deg,
+            pitch_deg=pitch_deg,
+            roll_deg=roll_deg,
+            mode="bilinear",
+        )
+        recovered_frames.append(Image.fromarray(np.clip(recovered_np, 0, 255).astype(np.uint8)))
+
+    return recovered_frames
+
+
+def process_batch(
+    batch,
+    args,
+    pipeline,
+    rays,
+    weight_dtype,
+    output_path: str,
+    episode: str,
+    decode_chunk_size: int = 8,
+):
     """Process a single batch for inference and save results."""
     # Prepare batch data
     first_frame, camera_traj, plucker_embedding, memorized_pixel_values, images = prepare_batch_data(
@@ -201,7 +287,7 @@ def process_batch(batch, args, pipeline, rays, weight_dtype, output_path: str, e
             height=args.height,
             width=args.width,
             num_frames=args.num_frames,
-            decode_chunk_size=8,
+            decode_chunk_size=decode_chunk_size,
             motion_bucket_id=127,
             fps=7,
             noise_aug_strength=0.02,
@@ -214,8 +300,16 @@ def process_batch(batch, args, pipeline, rays, weight_dtype, output_path: str, e
     frames_path = os.path.join(output_path, episode, "predictions")
     frames_gt_path = os.path.join(output_path, episode, "predictions_gt")
 
+    if getattr(args, "only_position", False):
+        episode_path = _extract_episode_path(batch)
+        frame_ids = _extract_frame_ids(batch)
+        video_frames = _recover_only_position_predictions(video_frames, frame_ids, episode_path)
+        gt_frames = _load_raw_gt_frames(episode_path, frame_ids)
+    else:
+        gt_frames = images[0]
+
     # Save frames
-    save_frames(video_frames, images[0], frames_path, frames_gt_path, args.num_frames)
+    save_frames(video_frames, gt_frames, frames_path, frames_gt_path, args.num_frames)
 
 
 def main():
@@ -254,7 +348,16 @@ def main():
         current_episode = val_dataset.episodes[idx]
 
 
-        process_batch(batch, args, pipeline, rays, weight_dtype, output_path, current_episode)
+        process_batch(
+            batch,
+            args,
+            pipeline,
+            rays,
+            weight_dtype,
+            output_path,
+            current_episode,
+            decode_chunk_size=args.decode_chunk_size,
+        )
 
 
 

@@ -290,6 +290,7 @@ class CameraTrajDataset(Dataset):
         pixel_mask_ratio_min=0.1,
         pixel_mask_ratio_max=0.4,
         only_position=False,
+        clip_start_frame=None,
     ):
         """
         Args:
@@ -320,6 +321,7 @@ class CameraTrajDataset(Dataset):
         self.pixel_mask_ratio_min = pixel_mask_ratio_min
         self.pixel_mask_ratio_max = pixel_mask_ratio_max
         self.only_position = only_position
+        self.clip_start_frame = clip_start_frame
 
         # detect all episodes
         self.episodes = []
@@ -425,11 +427,16 @@ class CameraTrajDataset(Dataset):
             sampled_initial_frame_idx = frame_ids[0]
         else:
             if self.memory_sampling_args.get("sampling_method") == "empty_with_traj":
-                # Sample a random contiguous clip without using the episode's first
-                # frame as the start frame when possible.
-                frame_ids = self._sample_contiguous_frames(
-                    episode_length, exclude_episode_first_frame=True
-                )
+                if self.clip_start_frame is not None:
+                    frame_ids = self._fixed_contiguous_frames(
+                        episode_length, self.clip_start_frame
+                    )
+                else:
+                    # Sample a random contiguous clip without using the episode's first
+                    # frame as the start frame when possible.
+                    frame_ids = self._sample_contiguous_frames(
+                        episode_length, exclude_episode_first_frame=True
+                    )
                 current_images = self._load_images_by_ids(current_episode, frame_ids)
                 current_traj = self._load_traj_by_ids(current_episode, frame_ids)
                 start_idx = frame_ids[0]
@@ -504,6 +511,7 @@ class CameraTrajDataset(Dataset):
             "memorized_cam_traj": memorized_traj,
             "initial_frame_traj": initial_frame_traj,
             "initial_frame_image": initial_frame_image,
+            "frame_ids": torch.tensor(frame_ids if "frame_ids" in locals() else list(range(start_idx, end_idx))),
             "episode_path": os.path.join(self.root, current_episode),
         }
 
@@ -567,6 +575,28 @@ class CameraTrajDataset(Dataset):
             else first_frame_id
         )
         start = random.randint(min_start, max_start)
+
+        return [start + i for i in range(num_frames)]
+
+    def _fixed_contiguous_frames(self, episode_length, start_frame_id):
+        """
+        Deterministically select a contiguous clip starting from a given frame id.
+        """
+        first_frame_id = 0 if self.id_zero_start else 1
+        last_frame_id = (episode_length - 1) if self.id_zero_start else episode_length
+        num_frames = self.sequence_length
+
+        start = int(start_frame_id)
+        end = start + num_frames - 1
+
+        if start < first_frame_id:
+            raise ValueError(
+                f"clip_start_frame={start} is smaller than the first valid frame id {first_frame_id}."
+            )
+        if end > last_frame_id:
+            raise ValueError(
+                f"clip_start_frame={start} with num_frames={num_frames} exceeds episode length {episode_length}."
+            )
 
         return [start + i for i in range(num_frames)]
 
@@ -980,12 +1010,15 @@ def custom_collate_fn(batch):
     batched_memorized_cam_traj = torch.stack(
         [sample["memorized_cam_traj"] for sample in batch]
     )
+    batched_frame_ids = torch.stack([sample["frame_ids"] for sample in batch])
 
     return {
         "pixel_values": batched_pixel_values,
         "cam_traj": batched_cam_traj,
         "memorized_pixel_values": batched_memorized_pixel_values,
         "memorized_cam_traj": batched_memorized_cam_traj,
+        "frame_ids": batched_frame_ids,
+        "episode_path": [sample["episode_path"] for sample in batch],
     }
 
 

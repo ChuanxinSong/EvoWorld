@@ -72,6 +72,14 @@ def tensor_to_pil(x: torch.Tensor) -> Image.Image:
     return Image.fromarray(x)
 
 
+def frame_to_pil(frame):
+    if isinstance(frame, Image.Image):
+        return frame
+    if isinstance(frame, torch.Tensor):
+        return tensor_to_pil(frame)
+    raise TypeError(f"Unsupported frame type: {type(frame)}")
+
+
 def pil_to_tensor(img: Image.Image) -> torch.Tensor:
     if not isinstance(img, Image.Image):
         return img
@@ -84,7 +92,26 @@ def save_frames(frames: List[torch.Tensor], out_dir: str, start_idx: int) -> Non
     os.makedirs(out_dir, exist_ok=True)
     for i, fr in enumerate(frames):
         p = os.path.join(out_dir, f"{i + start_idx + 1:03}.png")
-        tensor_to_pil(fr).save(p)
+        frame_to_pil(fr).save(p)
+
+
+def save_comparison_frames(pred_frames, gt_frames, out_dir: str, start_idx: int) -> None:
+    os.makedirs(out_dir, exist_ok=True)
+    if len(pred_frames) != len(gt_frames):
+        raise ValueError(
+            f"Prediction and GT frame counts must match, got {len(pred_frames)} and {len(gt_frames)}."
+        )
+
+    for i, (pred, gt) in enumerate(zip(pred_frames, gt_frames)):
+        pred_pil = frame_to_pil(pred)
+        gt_pil = frame_to_pil(gt)
+        if gt_pil.size != pred_pil.size:
+            gt_pil = gt_pil.resize(pred_pil.size, Image.BICUBIC)
+        comparison = Image.new("RGB", (pred_pil.width, pred_pil.height + gt_pil.height))
+        comparison.paste(pred_pil, (0, 0))
+        comparison.paste(gt_pil, (0, pred_pil.height))
+        p = os.path.join(out_dir, f"{i + start_idx + 1:03}.png")
+        comparison.save(p)
 
 
 # -----------------------
@@ -105,7 +132,11 @@ class UnifiedLoopConsistencyPipeline:
     # ---------- Model init ----------
     def initialize_models(self) -> None:
         self.logger.info("Loading Navigator (UNet + SVD pipeline)...")
-        self.navigator = Navigator(height=self.args.height, width=self.args.width)
+        self.navigator = Navigator(
+            height=self.args.height,
+            width=self.args.width,
+            decode_chunk_size=self.args.decode_chunk_size,
+        )
         self.navigator.get_pipeline(
             self.args.unet_path,
             self.args.svd_path,
@@ -157,6 +188,8 @@ class UnifiedLoopConsistencyPipeline:
             load_complete_episode=False,
             reprojection_name="rendered_panorama_vggt_open3d",
             is_single_video=is_single_video,
+            only_position=self.args.only_position,
+            clip_start_frame=self.args.clip_start_frame,
         )
 
         loader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=0, shuffle=False)
@@ -334,10 +367,18 @@ class UnifiedLoopConsistencyPipeline:
                     gt_frames = gt_frames[1:]
                 save_frames(gt_frames, frames_gt_path, start_idx_seg)
 
+                compare_path = os.path.join(episode_save_dir, f"predictions_compare_{segment_id}")
+                save_comparison_frames(generated_frames, gt_frames, compare_path, start_idx_seg)
+
         self.logger.info("Episode %s processing completed.", episode_label)
 
     @torch.inference_mode()
     def run_pipeline(self) -> None:
+        if self.args.only_position:
+            raise NotImplementedError(
+                "--only_position is currently supported only in --single_segment mode."
+            )
+
         set_random_seeds(self.args.seed)
         self.logger.info("Starting plucker-only unified pipeline...")
         self.logger.info("Mode: empty_with_traj + first frame + plucker embedding + zero memory")
@@ -378,7 +419,16 @@ class UnifiedLoopConsistencyPipeline:
             # ensure arg for process_batch
             self.args.mask_mem = False
             self.logger.info("")
-            process_batch(batch, self.args, pipeline, rays, weight_dtype, episode_save_dir, current_episode)
+            process_batch(
+                batch,
+                self.args,
+                pipeline,
+                rays,
+                weight_dtype,
+                episode_save_dir,
+                current_episode,
+                decode_chunk_size=self.args.decode_chunk_size,
+            )
 
 
 # -----------------------
@@ -412,11 +462,28 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--pers_width", type=int, default=DEFAULT_PERS_W, help="Perspective width for VGGT stage")
     parser.add_argument("--pers_height", type=int, default=DEFAULT_PERS_H, help="Perspective height for VGGT stage")
     parser.add_argument("--save_frames", action="store_true", help="Save intermediate frames")
+    parser.add_argument(
+        "--decode_chunk_size",
+        type=int,
+        default=8,
+        help="VAE decode chunk size. Smaller values reduce memory usage.",
+    )
+    parser.add_argument(
+        "--clip_start_frame",
+        type=int,
+        default=None,
+        help="Optional 1-based start frame id for single-segment evaluation. If omitted, the clip start is sampled.",
+    )
 
     # Options
     parser.add_argument("--curve_path", action="store_true", help="Use curve path navigation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--single_segment", action="store_true", help="Use single segment fast path")
+    parser.add_argument(
+        "--only_position",
+        action="store_true",
+        help="Use aligned_to_first panoramas/poses and apply only-position evaluation logic.",
+    )
 
     return parser.parse_args()
 
