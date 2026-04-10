@@ -6,16 +6,19 @@
 # link to correct cudnn and cuda
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
-export CUDA_VISIBLE_DEVICES=2
+export CUDA_VISIBLE_DEVICES=0
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# source paths.env, get BASE_FOLDER and OUTPUT_ROOT
+source "$SCRIPT_DIR/paths.env"
 
 # CKPT=MODELS/evoworld_curve_unity
 # CKPT=/data1/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93/
 # CKPT=/home/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-576
-CKPT=/home/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-512
+CKPT=/home/user/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-512
 
-BASE_FOLDER=/data1/songcx/dataset/evoworld/unity_curve
-OUTPUT_ROOT=/data1/songcx/results/evoworld/output_results/evo_baseline
-SAVE_DIR=$OUTPUT_ROOT/$(basename $CKPT)/eval_unity_curve
+OUTPUT_ROOT="$Result_OUTPUT_ROOT"
+SAVE_DIR="$OUTPUT_ROOT/$(basename "$CKPT")/eval_unity_curve"
 START_IDX=0
 NUM_DATA_PER_GPU=200
 NUM_SEGMENTS=3
@@ -51,5 +54,3 @@ echo "Command: $CMD"
 eval $CMD
 
 echo "Unified pipeline completed!"
-
-
