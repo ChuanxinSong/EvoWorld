@@ -16,6 +16,7 @@ except:
 import logging
 
 from conver_equi_cube import rotate_equirect
+from utils.image_utils import random_mask_frames, to_uint8_image_array
 from utils.constant import UNITY_TO_OPENCV
 
 # Set up the logger
@@ -174,19 +175,6 @@ def get_episode_panorama_dir(root, episode, only_position=False):
     return os.path.join(root, episode, "panorama")
 
 
-def to_uint8_image_array(img):
-    img = np.asarray(img)
-    if img.dtype == np.uint8:
-        return img
-
-    if np.issubdtype(img.dtype, np.floating):
-        max_value = float(np.nanmax(img)) if img.size else 0.0
-        if max_value <= 1.0:
-            img = img * 255.0
-
-    return np.clip(img, 0, 255).astype(np.uint8)
-
-
 def build_traj_file_from_raw_info(
     root,
     episodes,
@@ -340,6 +328,7 @@ class CameraTrajDataset(Dataset):
         self.last_segment_length = last_segment_length
         self.raw_trajectories = None
 
+        # read camera trajectories from the given trajectory file or build from raw txt files
         if trajectory_file is None:
             main_cache_name = (
                 ALIGNED_TRAJ_CACHE_FILE if self.only_position else DEFAULT_TRAJ_CACHE_FILE
@@ -409,7 +398,7 @@ class CameraTrajDataset(Dataset):
         # print("current_episode: ",current_episode)
         #  get current episode length
         episode_length = len(
-            self.trajectories["raw_trajectories"][current_episode].keys()
+            self.trajectories["trajectories"][current_episode].keys()
         )
         first_frame_id = 0 if self.id_zero_start else 1
         sampled_initial_frame_idx = first_frame_id
@@ -419,30 +408,47 @@ class CameraTrajDataset(Dataset):
         if self.pretrain_mode:
             # Pretrain mode: random start + random stride sampling
             frame_ids = self._sample_frames_with_stride(episode_length)
-            current_images = self._load_images_by_ids(current_episode, frame_ids)
+            current_images = self._load_images_for_frame_ids(current_episode, frame_ids)
             current_traj = self._load_traj_by_ids(current_episode, frame_ids)
-            # Generate masked GT frames as memorized_pixel_values
-            memorized_images = self._random_mask_frames(current_images)
             start_idx = frame_ids[0]
             sampled_initial_frame_idx = frame_ids[0]
         else:
             if self.memory_sampling_args.get("sampling_method") == "empty_with_traj":
-                if self.clip_start_frame is not None:
-                    frame_ids = self._fixed_contiguous_frames(
-                        episode_length, self.clip_start_frame
+                if self.load_complete_episode:
+                    start_idx = (
+                        int(self.clip_start_frame)
+                        if self.clip_start_frame is not None
+                        else first_frame_id
                     )
+                    # Validate start_idx against episode length and first frame id
+                    if start_idx < first_frame_id:
+                        raise ValueError(
+                            f"clip_start_frame={start_idx} is smaller than the first valid frame id {first_frame_id}."
+                        )
+                    if start_idx > episode_length:
+                        raise ValueError(
+                            f"clip_start_frame={start_idx} exceeds episode length {episode_length}."
+                        )
+                    end_idx = episode_length + 1
+                    frame_ids = list(range(start_idx, end_idx))
                 else:
-                    # Sample a random contiguous clip without using the episode's first
-                    # frame as the start frame when possible.
-                    frame_ids = self._sample_contiguous_frames(
-                        episode_length, exclude_episode_first_frame=True
-                    )
-                current_images = self._load_images_by_ids(current_episode, frame_ids)
+                    if self.clip_start_frame is not None:
+                        frame_ids = self._fixed_contiguous_frames(
+                            episode_length, self.clip_start_frame
+                        )
+                    else:
+                        # Sample a random contiguous clip without using the episode's first
+                        # frame as the start frame when possible.
+                        frame_ids = self._sample_contiguous_frames(
+                            episode_length, exclude_episode_first_frame=True
+                        )
+                current_images = self._load_images_for_frame_ids(current_episode, frame_ids)
                 current_traj = self._load_traj_by_ids(current_episode, frame_ids)
                 start_idx = frame_ids[0]
                 sampled_initial_frame_idx = frame_ids[0]
             else:
                 # Original mode: fixed segment + reprojection
+                # 挑一个固定起点，然后读取一段连续的图像和轨迹；如果不是整段模式，就默认取 episode 的最后一个固定长度片段。
                 valid_range_start_idx = (
                     episode_length - self.last_segment_length + 1
                     if not self.load_complete_episode
@@ -466,21 +472,35 @@ class CameraTrajDataset(Dataset):
                 current_traj = self.load_traj(current_episode, start_idx, end_idx)
 
         # store the current trajectory for display
+        # 当前采样轨迹
         self.current_trajectory = current_traj.clone()
+        # 当前 episode 全轨迹
         self.current_episode_trajectory = torch.tensor(
             [
                 pose
-                for pose in self.trajectories["raw_trajectories"][
+                for pose in self.trajectories["trajectories"][
                     current_episode
                 ].values()
             ]
-        )
+        ) 
 
-        if not self.pretrain_mode:
+        # get memorized frames for the current episode according to the sampling method
+        if self.pretrain_mode:
+            # Generate masked GT frames as memorized_pixel_values
+            memorized_images = random_mask_frames(
+                current_images,
+                self.patch_size,
+                self.patch_mask_ratio_min,
+                self.patch_mask_ratio_max,
+                self.pixel_mask_ratio_min,
+                self.pixel_mask_ratio_max,
+            )
+        else:
             # sample associated memories(images and trajectories) from pre-built trajectory map
             memories = self.sampling_memories(current_traj, current_episode, start_idx)
             memorized_images = memories["images"]
 
+        # scale the position part of the trajectory 
         current_traj[:, :3] = current_traj[:, :3] * self.pos_scale
 
         # store the current memory for display
@@ -514,6 +534,7 @@ class CameraTrajDataset(Dataset):
             "frame_ids": torch.tensor(frame_ids if "frame_ids" in locals() else list(range(start_idx, end_idx))),
             "episode_path": os.path.join(self.root, current_episode),
         }
+    
 
     # ==================== Pretrain mode helpers ====================
 
@@ -580,7 +601,18 @@ class CameraTrajDataset(Dataset):
 
     def _fixed_contiguous_frames(self, episode_length, start_frame_id):
         """
-        Deterministically select a contiguous clip starting from a given frame id.
+        Build a deterministic contiguous clip of length `self.sequence_length`.
+        
+        Args:
+            episode_length: Total number of frames available in the episode.
+            start_frame_id: 1-based or 0-based frame id, depending on `id_zero_start`.
+
+        Returns:
+            A list of consecutive frame ids with length `self.sequence_length`.
+
+        Raises:
+            ValueError: If the requested clip starts before the first valid frame,
+            or extends past the end of the episode.
         """
         first_frame_id = 0 if self.id_zero_start else 1
         last_frame_id = (episode_length - 1) if self.id_zero_start else episode_length
@@ -613,11 +645,31 @@ class CameraTrajDataset(Dataset):
         )
 
     def _get_only_position_rotation_delta(self, episode, reference_frame_id):
+        """
+        Compute the orientation offset between aligned and raw poses.
+
+        In `only_position` mode, images are loaded from the
+        `aligned_to_first` panorama directory, but the dataset still keeps both
+        aligned and raw trajectory caches. This helper compares the same
+        reference frame in those two caches and returns the rotation delta that
+        should be applied to account for the alignment.
+
+        Args:
+            episode: Episode name used to index the trajectory caches.
+            reference_frame_id: Frame id used as the comparison anchor.
+
+        Returns:
+            Tuple[float, float, float]: `(yaw_deg, pitch_deg, roll_deg)` where
+            each value is `aligned_pose - raw_pose` for the same frame.
+
+        Notes:
+            Returns `(0.0, 0.0, 0.0)` when `only_position` is disabled.
+        """
         if not self.only_position:
             return 0.0, 0.0, 0.0
 
         frame_key = str(reference_frame_id)
-        aligned_reference_pose = self.trajectories["raw_trajectories"][episode][frame_key]
+        aligned_reference_pose = self.trajectories["trajectories"][episode][frame_key]
         raw_reference_pose = self.raw_trajectories[episode][frame_key]
 
         yaw_deg = aligned_reference_pose[4] - raw_reference_pose[4]
@@ -626,6 +678,20 @@ class CameraTrajDataset(Dataset):
         return yaw_deg, pitch_deg, roll_deg
 
     def _load_images_for_frame_ids(self, episode, frame_ids, reference_frame_id=None):
+        """
+        Load a clip of images for the given frame ids.
+
+        Args:
+            episode: Episode name used to resolve image paths.
+            frame_ids: List of frame ids to load in order.
+            reference_frame_id: Optional frame id used as the rotation anchor in
+                `only_position` mode. If omitted, the first frame in `frame_ids`
+                is used.
+
+        Returns:
+            torch.Tensor: A tensor of shape `[T, C, H, W]` or `[C, H, W]`
+            when only one frame is requested.
+        """
         if self.no_images:
             images = torch.zeros(len(frame_ids), 3, self.height, self.width)
             return images if len(frame_ids) > 1 else images[0]
@@ -636,9 +702,6 @@ class CameraTrajDataset(Dataset):
         reference_frame_id = (
             frame_ids[0] if reference_frame_id is None else reference_frame_id
         )
-        yaw_deg, pitch_deg, roll_deg = self._get_only_position_rotation_delta(
-            episode, reference_frame_id
-        )
 
         if self.only_position:
             image_batch = []
@@ -647,6 +710,11 @@ class CameraTrajDataset(Dataset):
                 with Image.open(image_path) as image:
                     image_batch.append(np.array(image.convert("RGB")))
 
+            # Rotate the whole clip (using the first sampled frame as the reference)
+            # so the clip stays aligned with its pose anchor.
+            yaw_deg, pitch_deg, roll_deg = self._get_only_position_rotation_delta(
+                episode, reference_frame_id
+            )
             rotated_batch = rotate_equirect(
                 np.stack(image_batch, axis=0),
                 yaw_deg=yaw_deg,
@@ -669,17 +737,6 @@ class CameraTrajDataset(Dataset):
 
         return torch.stack(images) if len(images) > 1 else images[0]
 
-    def _load_images_by_ids(self, episode, frame_ids):
-        """
-        Load images by a list of frame indices.
-        Args:
-            episode: str, episode name
-            frame_ids: list[int], frame indices
-        Returns:
-            torch.Tensor: [Seq C H W]
-        """
-        return self._load_images_for_frame_ids(episode, frame_ids)
-
     def _load_traj_by_ids(self, episode, frame_ids):
         """
         Load camera trajectory by a list of frame indices.
@@ -691,72 +748,8 @@ class CameraTrajDataset(Dataset):
         """
         traj = []
         for fid in frame_ids:
-            traj.append(self.trajectories["raw_trajectories"][episode][str(fid)])
+            traj.append(self.trajectories["trajectories"][episode][str(fid)])
         return torch.tensor(traj)
-
-    def _random_mask_frames(self, images):
-        """
-        Apply hybrid Random Patch + Random Pixel masking to GT frames for pretrain mode.
-        Frame 0 (first frame) is kept clean; frames 1..N-1 are masked in two stages:
-          Stage 1 - Patch masking: divide the image into patch_size × patch_size patches,
-                    randomly mask a proportion of patches (whole patch set to -1).
-          Stage 2 - Pixel masking: in the remaining *unmasked* patches, randomly mask
-                    individual pixels (set to -1).
-        Masked pixels are set to -1 (black in [-1,1] range, i.e. 0 in [0,1]).
-        This matches the EvoWorld VGGT reprojection convention where Open3D renders
-        empty/background regions as black (RGB 0,0,0), which after ToTensor + CustomRescale
-        becomes -1 in [-1,1] range.
-
-        Total effective mask ratio ≈ patch_ratio + (1 - patch_ratio) × pixel_ratio
-
-        Args:
-            images: torch.Tensor, [Seq C H W], pixel range [-1, 1]
-        Returns:
-            torch.Tensor: [Seq C H W], masked frames
-        """
-        masked = images.clone()
-        num_frames, C, H, W = masked.shape
-        ps = self.patch_size
-
-        # Number of patches along each dimension (ceiling division handles remainder)
-        num_patches_h = (H + ps - 1) // ps
-        num_patches_w = (W + ps - 1) // ps
-        total_patches = num_patches_h * num_patches_w
-
-        for i in range(1, num_frames):  # skip first frame
-            # ---- Stage 1: Random Patch Masking ----
-            patch_ratio = random.uniform(self.patch_mask_ratio_min, self.patch_mask_ratio_max)
-            num_patches_to_mask = int(total_patches * patch_ratio)
-
-            # Randomly select which patches to mask
-            patch_indices = list(range(total_patches))
-            random.shuffle(patch_indices)
-            masked_patch_set = set(patch_indices[:num_patches_to_mask])
-
-            # Build a pixel-level mask from selected patches: True = masked by patch
-            patch_mask = torch.zeros(H, W, dtype=torch.bool)
-            for p_idx in masked_patch_set:
-                ph = p_idx // num_patches_w
-                pw = p_idx % num_patches_w
-                h_start = ph * ps
-                h_end = min(h_start + ps, H)
-                w_start = pw * ps
-                w_end = min(w_start + ps, W)
-                patch_mask[h_start:h_end, w_start:w_end] = True
-
-            # ---- Stage 2: Random Pixel Masking (on unmasked region) ----
-            pixel_ratio = random.uniform(self.pixel_mask_ratio_min, self.pixel_mask_ratio_max)
-            # Generate random pixel mask for the full image
-            pixel_rand = torch.rand(H, W)
-            # Only apply pixel mask where patch_mask is False (unmasked patches)
-            pixel_mask = (~patch_mask) & (pixel_rand < pixel_ratio)
-
-            # ---- Combine both masks ----
-            combined_mask = patch_mask | pixel_mask  # [H, W]
-            combined_mask_3c = combined_mask.unsqueeze(0).expand(C, -1, -1)  # [C, H, W]
-            masked[i][combined_mask_3c] = -1.0  # black in [-1,1], matches reprojection background
-
-        return masked
 
     # ==================== End pretrain mode helpers ====================
 
@@ -786,11 +779,13 @@ class CameraTrajDataset(Dataset):
 
     def build_traj_map(self, trajectories: dict):
         """
-        build a trajectory map by aggregating raw trajectories.
+        Build a trajectory map by aggregating trajectory data.
         Args:
-            trajectories: dict, a two-layered dictionary where the key is episode name (str) and frame_id, the value is a dictionary of camera poses.
+            trajectories: dict, a two-layered dictionary where the key is episode name (str)
+                and frame_id, the value is a dictionary of camera poses.
         Returns:
             dict: a dictionary containing the following keys:
+                trajectories: dict, the aggregated trajectory map
                 all_poses: torch.tensor, list of all camera poses
                 all_metadata: list, list of all metadata
         """
@@ -802,11 +797,12 @@ class CameraTrajDataset(Dataset):
                 all_poses.append([x, y, z, rotx, roty, rotz])
                 all_metadata.append({"episode_id": episode_id, "frame_id": frame_id})
         all_poses = torch.tensor(all_poses)
-        return {
-            "raw_trajectories": trajectories,
+        traj_map = {
+            "trajectories": trajectories,
             "all_poses": all_poses,
             "all_metadata": all_metadata,
         }
+        return traj_map
 
     def load_images(self, episode, start_idx, end_idx):
         """
@@ -820,6 +816,23 @@ class CameraTrajDataset(Dataset):
         """
         frame_ids = list(range(start_idx, end_idx))
         return self._load_images_for_frame_ids(episode, frame_ids)
+
+    def load_traj(self, episode, start_idx, end_idx):
+        """
+        load camera trajectory from episode and frame index
+        Args:
+            episode: str, episode name
+            start_idx: int, start index of the sequence
+            end_idx: int, end index of the sequence
+        Returns:
+            torch.Tensor: [Seq 6]
+        """
+        traj = []
+        for i in range(start_idx, end_idx):
+            i = str(i)
+            traj.append(self.trajectories["trajectories"][episode][i])
+
+        return torch.tensor(traj)
 
     def load_reprojection(self, episode):
         """
@@ -835,44 +848,31 @@ class CameraTrajDataset(Dataset):
             images = torch.zeros(self.sequence_length, 3, self.height, self.width)
             return images
         images = []
-        if self.memory_path is None:
-            current_reprojection_path = os.path.join(
-                self.root, episode, self.reprojection_name
-            )
-        else:
-            current_reprojection_path = os.path.join(
-                self.memory_path, episode, self.reprojection_name
-            )
+        root_episode_dir = (
+            self.memory_path if self.memory_path is not None else self.root
+        )
+        current_reprojection_path = os.path.join(
+            root_episode_dir, episode, self.reprojection_name
+        )
         reprojection_list = sorted(os.listdir(current_reprojection_path))
         # only keep *.png files
         reprojection_list = [f for f in reprojection_list if f.endswith(".png")]
         reprojection_length = len(reprojection_list)
-        # 限制加载的重投影图像数量，使其与 last_segment_length - 1 匹配
         # 因为后面会添加 first_frame，所以这里加载 last_segment_length - 1 张
         max_reprojection_frames = self.last_segment_length - 1
         reprojection_length = min(reprojection_length, max_reprojection_frames)
         #  load image from episode
         for i in range(0, reprojection_length):
             image_name = self.image_name_prefix + f"{i:02}.png"
-            if self.memory_path is None:
-                images_path = os.path.join(
-                    self.root, episode, self.reprojection_name, image_name
-                )
-            else:
-                images_path = os.path.join(
-                    self.memory_path, episode, self.reprojection_name, image_name
-                )
+            images_path = os.path.join(
+                root_episode_dir, episode, self.reprojection_name, image_name
+            )
             if not os.path.exists(images_path):
                 print(f"File '{images_path}' not found, try find jpg.")
                 image_name = self.image_name_prefix + f"{i:02}.jpg"
-                if self.memory_path is None:
-                    images_path = os.path.join(
-                        self.root, episode, self.reprojection_name, image_name
-                    )
-                else:
-                    images_path = os.path.join(
-                        self.memory_path, episode, self.reprojection_name, image_name
-                    )
+                images_path = os.path.join(
+                    root_episode_dir, episode, self.reprojection_name, image_name
+                )
             cur_images = Image.open(images_path)
             cur_images = cur_images.convert("RGB")
             cur_images = self.transform(cur_images)
@@ -880,30 +880,13 @@ class CameraTrajDataset(Dataset):
         first_frame = self.load_images(episode, 1, 2)
         # TODO: consider only loading the first frame without transformation, since the reprojection images are already transformed. This can avoid potential inconsistency between the first frame and reprojection images.
         # # consider changing to:
-        # episode_length = len(self.trajectories['raw_trajectories'][episode].keys())
+        # episode_length = len(self.trajectories['trajectories'][episode].keys())
         # valid_range_start_idx = episode_length - self.last_segment_length + 1 if not self.load_complete_episode else 1
         # valid_range_start_idx = valid_range_start_idx - 1 if self.id_zero_start else valid_range_start_idx
         # first_frame = self.load_images(episode, valid_range_start_idx, valid_range_start_idx+1)
         images.insert(0, first_frame)
 
         return torch.stack(images) if len(images) > 1 else images[0]
-
-    def load_traj(self, episode, start_idx, end_idx):
-        """
-        load camera trajectory from episode and frame index
-        Args:
-            episode: str, episode name
-            start_idx: int, start index of the sequence
-            end_idx: int, end index of the sequence
-        Returns:
-            torch.Tensor: [Seq 6]
-        """
-        traj = []
-        for i in range(start_idx, end_idx):
-            i = str(i)
-            traj.append(self.trajectories["raw_trajectories"][episode][i])
-
-        return torch.tensor(traj)
 
     def sampling_memories(self, current_traj, current_episode, start_idx):
         """
@@ -917,50 +900,23 @@ class CameraTrajDataset(Dataset):
                 'traj': torch.Tensor, [Num_M 6]
         """
         if self.memory_sampling_args["sampling_method"] == "reprojection":
-            return self.get_reprojection_memory(current_episode, current_traj)
+            # Reprojection memory reuses the rendered panorama frames and keeps
+            # the current trajectory as-is.
+            images = self.load_reprojection(current_episode)
+            traj = current_traj.clone()
+            return {"images": images, "traj": traj}
         elif self.memory_sampling_args["sampling_method"] == "empty_with_traj":
-            return self.get_empty_memory_with_trajectories(
-                current_episode, current_traj
-            )
+            # Empty memory uses zero-filled images while preserving the current
+            # trajectory for conditioning.
+            num_frames = current_traj.shape[0]
+            return {
+                "images": torch.zeros(num_frames, 3, self.height, self.width),
+                "traj": current_traj,
+            }
         else:
             raise ValueError(
                 f"Sampling method '{self.memory_sampling_args['sampling_method']}' not supported."
             )
-
-    def get_empty_memory_with_trajectories(self, current_episode, current_traj):
-        """
-        Get empty memory (zeros) in the same shape as reprojection memory.
-        Args:
-            current_episode: str, episode name (unused)
-            current_traj: torch.Tensor, [Seq, 6]
-        Returns:
-            dict: a dictionary containing the following keys:
-                'images': torch.Tensor, [Seq, C, H, W]
-                'traj': torch.Tensor, [Seq, 6]
-        """
-        num_frames = current_traj.shape[0]
-        return {
-            "images": torch.zeros(num_frames, 3, self.height, self.width),
-            "traj": current_traj,
-        }
-
-    def get_reprojection_memory(self, current_episode, current_traj):
-        """
-        get reprojection from rendered panorama
-        Args:
-            current_episode: str, current episode name
-            episode: str, episode name
-            current_traj: torch.Tensor, [Seq 6]
-        Returns:
-            dict: a dictionary containing the following keys:
-                'images': torch.Tensor, [Num_M C H W]
-                'traj': torch.Tensor, [Num_M 6]
-        """
-        #  load image from episode
-        images = self.load_reprojection(current_episode)
-        # load the camera trajectory: [Seq 6]: [x, y, z, rotx(along x) roty(along y) rotz(along z)]
-        traj = current_traj.clone()
-        return {"images": images, "traj": traj}
 
     def build_transform_pipeline(self, height, width, transform=None):
         """

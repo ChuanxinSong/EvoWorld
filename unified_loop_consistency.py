@@ -55,6 +55,7 @@ from equilib import Equi2Pers
 
 from utils.geometry import xyz_euler_to_four_by_four_matrix_batch
 from utils.conversion import numpy_to_image
+from utils.image_utils import frame_to_pil, pil_to_tensor, tensor_to_pil
 from utils.plucker_embedding import equirectangular_to_ray
 
 # -----------------------
@@ -76,37 +77,11 @@ DEFAULT_PERS_H, DEFAULT_PERS_W = 384, 512
 # -----------------------
 # Small utilities
 # -----------------------
-
 def set_random_seeds(seed: int) -> None:
     torch.manual_seed(seed)
     np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-
-def tensor_to_pil(x: torch.Tensor) -> Image.Image:
-    if not isinstance(x, torch.Tensor):
-        return x
-    # assume CHW in [-1,1]
-    x = (x * 0.5 + 0.5).clamp(0, 1)
-    x = (x.mul(255).byte().detach().cpu().numpy().transpose(1, 2, 0))
-    return Image.fromarray(x)
-
-
-def frame_to_pil(frame):
-    if isinstance(frame, Image.Image):
-        return frame
-    if isinstance(frame, torch.Tensor):
-        return tensor_to_pil(frame)
-    raise TypeError(f"Unsupported frame type: {type(frame)}")
-
-
-def pil_to_tensor(img: Image.Image) -> torch.Tensor:
-    if not isinstance(img, Image.Image):
-        return img
-    arr = np.asarray(img)
-    t = torch.from_numpy(arr).permute(2, 0, 1).float() / 255.0
-    return t * 2 - 1
 
 
 def save_frames(frames: List[torch.Tensor], out_dir: str, start_idx: int) -> None:
@@ -179,15 +154,16 @@ class UnifiedLoopConsistencyPipeline:
         self.equi2pers: Optional[Equi2Pers] = None
 
         # Utilities
-        self.point_processor = PointCloudProcessor()
-        self.scene_builder = SceneBuilder()
-        self.cubemap_renderer = CubemapRenderer()
+        self.point_processor = PointCloudProcessor() # 把 VGGT 的预测结果整理成可用的 3D 点云数据
+        self.scene_builder = SceneBuilder() # 把点云和相机位姿组装成一个 3D scene
+        self.cubemap_renderer = CubemapRenderer() # 把 3D scene 再渲染成 equirectangular panorama。
         self.logger = logging.getLogger(self.__class__.__name__)
         self.logger.info("Initializing unified pipeline...")
 
     # ---------- Model init ----------
     def initialize_models(self) -> None:
         self.logger.info("Loading Navigator (UNet + SVD pipeline)...")
+        # “推理执行器 + 路径控制器
         self.navigator = Navigator(
             height=self.args.height,
             width=self.args.width,
@@ -259,9 +235,10 @@ class UnifiedLoopConsistencyPipeline:
             load_complete_episode=load_complete_episode,
             reprojection_name="rendered_panorama_vggt_open3d",
             is_single_video=is_single_video,
+            clip_start_frame=self.args.clip_start_frame,
         )
 
-        loader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=0, shuffle=False)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=1, num_workers=8, shuffle=False)
         return dataset, loader
 
     # ---------- Core steps ----------
@@ -280,7 +257,8 @@ class UnifiedLoopConsistencyPipeline:
         memorized_images = torch.zeros_like(batch["memorized_pixel_values"][:, start_idx:end_idx]).to(self.device)
         start_image = images[0, 0].to(self.device)
 
-        navigate_fn = getattr(self.navigator, "navigate_curve_path" if self.args.curve_path else "navigate_path")
+        # navigate_fn = getattr(self.navigator, "navigate_curve_path" if self.args.curve_path else "navigate_path")
+        navigate_fn = self.navigator.navigate_curve_path if self.args.curve_path else self.navigator.navigate_path
         generations = navigate_fn(
             current_path,
             start_image,
@@ -289,7 +267,7 @@ class UnifiedLoopConsistencyPipeline:
             num_inference_steps=25,
             memorized_images=memorized_images,
             infer_segment=True,
-            segment_id=segment_id,
+            segment_id=segment_id, # here segment_id is 0.
         )
 
         navigation = [img for move in generations for img in move]
@@ -310,7 +288,8 @@ class UnifiedLoopConsistencyPipeline:
         memorized_pixel_values = [first_pixel_values] + memorized_pixel_values
         memorized_images = torch.stack(memorized_pixel_values).unsqueeze(0).to(self.device)
 
-        navigate_fn = getattr(self.navigator, "navigate_curve_path" if self.args.curve_path else "navigate_path")
+        # navigate_fn = getattr(self.navigator, "navigate_curve_path" if self.args.curve_path else "navigate_path")
+        navigate_fn = self.navigator.navigate_curve_path if self.args.curve_path else self.navigator.navigate_path
         generations = navigate_fn(
             current_path,
             start_image,
@@ -422,6 +401,26 @@ class UnifiedLoopConsistencyPipeline:
         cam *= UNITY_TO_OPENCV
         return cam
 
+    def is_episode_complete(self, episode: str) -> bool:
+        if not self.args.save_frames:
+            return False
+
+        episode_save_dir = os.path.join(self.args.save_dir, episode)
+        for segment_id in range(self.args.num_segments):
+            predictions_dir = os.path.join(episode_save_dir, f"predictions_{segment_id}")
+            if not os.path.isdir(predictions_dir):
+                return False
+
+            expected_frames = self.args.num_frames if segment_id == 0 else self.args.num_frames - 1
+            saved_frames = [
+                name for name in os.listdir(predictions_dir)
+                if name.lower().endswith(".png")
+            ]
+            if len(saved_frames) != expected_frames:
+                return False
+
+        return True
+
     # ---------- Episode orchestration ----------
     def process_episode(self, batch: Dict[str, Any], episode: str, dataset) -> None:
         self.logger.info(f"\nProcessing episode: {episode}")
@@ -430,6 +429,7 @@ class UnifiedLoopConsistencyPipeline:
         os.makedirs(episode_save_dir, exist_ok=True)
 
         episode_path = batch["episode_path"][0]
+        # import pdb; pdb.set_trace()
         camera_params = self.load_camera_poses(episode_path)
 
         all_generated_frames: List[torch.Tensor] = []
@@ -522,8 +522,8 @@ class UnifiedLoopConsistencyPipeline:
 
                 # Free memory
                 del preds, perspective_frames
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+                # if torch.cuda.is_available():
+                #     torch.cuda.empty_cache()
 
         self.logger.info(f"Episode {episode} processing completed!")
 
@@ -536,14 +536,18 @@ class UnifiedLoopConsistencyPipeline:
 
         self.initialize_models()
         data_root, is_single_video = self.determine_data_config()
-        val_dataset, val_loader = self.create_dataset_and_loader(data_root, is_single_video)
+        val_dataset, _ = self.create_dataset_and_loader(data_root, is_single_video)
 
-        for idx, batch in tqdm(enumerate(val_loader), total=len(val_loader)):
+        for idx in tqdm(range(len(val_dataset)), total=len(val_dataset)):
             if idx < self.args.start_idx:
                 continue
             if idx >= self.args.num_data + self.args.start_idx:
                 break
             current_episode = val_dataset.episodes[idx]
+            if self.args.skip_completed and self.is_episode_complete(current_episode):
+                self.logger.info(f"Skipping completed episode: {current_episode}")
+                continue
+            batch = torch.utils.data.default_collate([val_dataset[idx]])
             self.process_episode(batch, current_episode, val_dataset)
 
     @torch.inference_mode()
@@ -612,10 +616,21 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--pers_height", type=int, default=DEFAULT_PERS_H, help="Perspective height for VGGT stage")
     parser.add_argument("--save_frames", action="store_true", help="Save intermediate frames")
     parser.add_argument(
+        "--skip_completed",
+        action="store_true",
+        help="Skip episodes whose prediction frame counts are complete.",
+    )
+    parser.add_argument(
         "--decode_chunk_size",
         type=int,
         default=8,
         help="VAE decode chunk size. Smaller values reduce memory usage.",
+    )
+    parser.add_argument(
+        "--clip_start_frame",
+        type=int,
+        default=None,
+        help="Optional 1-based start frame id for deterministic clip selection.",
     )
 
     # Options

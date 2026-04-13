@@ -140,20 +140,34 @@ class Navigator:
         Returns:
         torch tensor: The extended segment. If len(segment) < num_model_frames, extend the segment to num_model_frames.
         """
-        
+        if isinstance(segment, torch.Tensor):
+            if segment.ndim == 1:
+                segment = segment.unsqueeze(0)
+        else:
+            segment = torch.stack(segment, dim=0)
+
         if len(segment) == 0:
             return segment
-        
+
         if len(segment) == 1:
-            roty = segment[0][4]
+            roty = segment[0, 4]
             delta_z = self.step_size * torch.cos(torch.deg2rad(roty)) * self.position_scale
             delta_x = self.step_size * torch.sin(torch.deg2rad(roty)) * self.position_scale
-            segment = torch.cat(segment).unsqueeze(0)
-            for i in range(num_model_frames - 1):
-                segment = torch.cat([segment, segment[-1].unsqueeze(0) + torch.tensor([delta_x, 0, delta_z, 0, 0, 0]).to(segment[0].device)], dim=0)
-
-            return segment
-        
+            delta = torch.stack(
+                [
+                    delta_x,
+                    segment.new_tensor(0.0),
+                    delta_z,
+                    segment.new_tensor(0.0),
+                    segment.new_tensor(0.0),
+                    segment.new_tensor(0.0),
+                ]
+            )
+            segment = segment.repeat(num_model_frames, 1)
+            offsets = torch.arange(
+                num_model_frames, device=segment.device, dtype=segment.dtype
+            ).unsqueeze(1) * delta.unsqueeze(0)
+            return segment + offsets
 
         if len(segment) < num_model_frames:
             len_segment = len(segment)
@@ -164,10 +178,10 @@ class Navigator:
                 from ipdb import set_trace; set_trace()
             assert all_close(last_step[3:], last_last_step[3:]), 'The rotation of the last two steps are not the same.'
             delta = last_step - last_last_step
-            segment_extra = torch.zeros((num_model_frames - len_segment, 6)).to(segment[0].device)
-            segment = torch.stack(segment)
-            for i in range(num_model_frames - len_segment):
-                segment_extra[i] = last_step + delta * (i+1)
+            steps = torch.arange(
+                1, num_model_frames - len_segment + 1, device=segment.device, dtype=segment.dtype
+            ).unsqueeze(1)
+            segment_extra = last_step.unsqueeze(0) + steps * delta.unsqueeze(0)
             segment = torch.cat([segment, segment_extra], dim=0)
             return segment
 
@@ -303,6 +317,18 @@ class Navigator:
         return segments
     
     def split_curve_into_segments(self, path):
+        """
+        Split a curve path into fixed-length overlapping segments.
+
+        Args:
+            path: List[Tensor[6]], the full trajectory path where each step is
+                `[x, y, z, rotx, roty, rotz]`.
+
+        Returns:
+            List[List[Tensor[6]]]: A list of segments. Each segment contains up
+                to 25 steps, and adjacent segments overlap by 1 step.
+                If the path is shorter than 25 steps, returns `[path]`.
+        """
         segments = []
         total_len = len(path)
         if total_len < 25:
@@ -422,6 +448,7 @@ class Navigator:
             if segment_id != 0:
                 use_memory = True
             else:
+                # for the first segment, do not use memory.
                 use_memory = False
             rotation_angle = segment[0][4] - current_angle
             current_angle = segment[-1][4]

@@ -16,6 +16,7 @@ from dataset.CameraTrajDataset import (
 )
 from evoworld.pipeline.pipeline_evoworld import StableVideoDiffusionPipeline
 from evoworld.trainer.unet_plucker import UNetSpatioTemporalConditionModel
+from utils.image_utils import frame_to_pil
 from utils.plucker_embedding import equirectangular_to_ray, ray_c2w_to_plucker
 
 sys.path.append("./evoworld")
@@ -184,20 +185,9 @@ def save_frames(video_frames, gt_frames, frames_path: str, frames_gt_path: str, 
         len(video_frames) == num_frames
     ), f"video frames {len(video_frames)} should equal num_frames {num_frames}!"
 
-    def _to_pil(frame):
-        if isinstance(frame, Image.Image):
-            return frame
-        if isinstance(frame, torch.Tensor):
-            frame = frame * 0.5 + 0.5
-            frame = Image.fromarray(
-                frame.mul(255).byte().detach().cpu().numpy().transpose(1, 2, 0)
-            )
-            return frame
-        raise TypeError(f"Unsupported frame type: {type(frame)}")
-
     for i in range(num_frames):
-        frame = _to_pil(video_frames[i])
-        gt_frame = _to_pil(gt_frames[i])
+        frame = frame_to_pil(video_frames[i])
+        gt_frame = frame_to_pil(gt_frames[i])
         if gt_frame.size != frame.size:
             gt_frame = gt_frame.resize(frame.size, Image.BICUBIC)
         comparison = Image.new("RGB", (frame.width, frame.height + gt_frame.height))
@@ -251,7 +241,7 @@ def _recover_only_position_predictions(video_frames, frame_ids: List[int], episo
         pitch_deg = raw_pose[3] - aligned_pose[3]
         roll_deg = raw_pose[5] - aligned_pose[5]
 
-        frame_np = np.array(frame.convert("RGB"))
+        frame_np = np.array(frame_to_pil(frame).convert("RGB"))
         recovered_np = rotate_equirect(
             frame_np,
             yaw_deg=yaw_deg,

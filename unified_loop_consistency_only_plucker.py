@@ -33,6 +33,7 @@ from evoworld.inference.navigator_evoworld import Navigator
 from evoworld.inference.forward_evoworld import process_batch
 from evoworld.trainer.unet_plucker import UNetSpatioTemporalConditionModel
 from evoworld.pipeline.pipeline_evoworld import StableVideoDiffusionPipeline
+from utils.image_utils import frame_to_pil, pil_to_tensor, tensor_to_pil
 from utils.plucker_embedding import equirectangular_to_ray
 
 # -----------------------
@@ -61,31 +62,6 @@ def set_random_seeds(seed: int) -> None:
     np.random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-
-def tensor_to_pil(x: torch.Tensor) -> Image.Image:
-    if not isinstance(x, torch.Tensor):
-        return x
-    # assume CHW in [-1,1]
-    x = (x * 0.5 + 0.5).clamp(0, 1)
-    x = (x.mul(255).byte().detach().cpu().numpy().transpose(1, 2, 0))
-    return Image.fromarray(x)
-
-
-def frame_to_pil(frame):
-    if isinstance(frame, Image.Image):
-        return frame
-    if isinstance(frame, torch.Tensor):
-        return tensor_to_pil(frame)
-    raise TypeError(f"Unsupported frame type: {type(frame)}")
-
-
-def pil_to_tensor(img: Image.Image) -> torch.Tensor:
-    if not isinstance(img, Image.Image):
-        return img
-    arr = np.asarray(img)
-    t = torch.from_numpy(arr).permute(2, 0, 1).float() / 255.0
-    return t * 2 - 1
 
 
 def save_frames(frames: List[torch.Tensor], out_dir: str, start_idx: int) -> None:
