@@ -7,7 +7,7 @@ set -e
 # link to correct cudnn and cuda
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
-export CUDA_VISIBLE_DEVICES=4
+export CUDA_VISIBLE_DEVICES=2
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # source paths.env, get BASE_FOLDER and OUTPUT_ROOT

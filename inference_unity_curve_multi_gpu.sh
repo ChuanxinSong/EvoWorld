@@ -27,7 +27,7 @@ CURVE_PATH=true
 SKIP_COMPLETED=true
 WIDTH=1024
 HEIGHT=576 # 576 | 512
-GPU_IDS="${GPU_IDS:-2,5}" # comma-separated GPU ids, e.g. GPU_IDS=2,3
+GPU_IDS="${GPU_IDS:-5,4}" # comma-separated GPU ids, e.g. GPU_IDS=2,3
 LOG_TO_CONSOLE="${LOG_TO_CONSOLE:-true}"
 
 mkdir -p "$SAVE_DIR"

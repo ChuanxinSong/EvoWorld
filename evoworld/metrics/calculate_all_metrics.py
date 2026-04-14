@@ -3,11 +3,33 @@ import torch
 from tqdm import tqdm
 import os
 import cv2
+from concurrent.futures import ThreadPoolExecutor
 from torchvision.utils import save_image
 from evoworld.metrics.other_metrics.calculate_lpips import calculate_lpips
-from evoworld.metrics.other_metrics.calculate_ssim import calculate_ssim
-from evoworld.metrics.other_metrics.calculate_psnr import calculate_psnr
-from evoworld.metrics.other_metrics.calculate_latent_mse import calculate_latent_mse
+from evoworld.metrics.other_metrics.calculate_ssim_torchmetrics import calculate_ssim
+from evoworld.metrics.other_metrics.calculate_psnr_torchmetrics import calculate_psnr
+from evoworld.metrics.other_metrics.calculate_latent_mse_gpu import calculate_latent_mse
+
+
+def to_jsonable(value):
+    if isinstance(value, dict):
+        return {to_jsonable(key): to_jsonable(val) for key, val in value.items()}
+    if isinstance(value, torch.Size):
+        return list(value)
+    if isinstance(value, torch.Tensor):
+        value = value.detach().cpu()
+        if value.numel() == 1:
+            return value.item()
+        return value.tolist()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, tuple):
+        return [to_jsonable(item) for item in value]
+    if isinstance(value, list):
+        return [to_jsonable(item) for item in value]
+    return value
 
 
 def to_BCTHW(x):
@@ -78,7 +100,7 @@ def calculate_fvd(videos1, videos2, device, method="styleganv"):
     return result
 
 
-def calculate_fvd_batch(videos1, videos2, device, method="styleganv", batch_size=10):
+def calculate_fvd_batch(videos1, videos2, device, method="styleganv", batch_size=10, full_only=False):
     """
     Compute FVD in a memory-efficient manner using batch processing.
 
@@ -88,6 +110,7 @@ def calculate_fvd_batch(videos1, videos2, device, method="styleganv", batch_size
         device (str): Device to run the computation on ('cuda' or 'cpu').
         method (str): Method to use for FVD calculation ('styleganv' or 'videogpt').
         batch_size (int): Number of videos to process at a time.
+        full_only (bool): If True, only compute FVD for the full clip length.
 
     Returns:
         dict: FVD values at different timestamps.
@@ -118,9 +141,10 @@ def calculate_fvd_batch(videos1, videos2, device, method="styleganv", batch_size
     videos2 = to_BCTHW(videos2)
 
     num_videos = videos1.shape[0]
+    clip_timestamps = [videos1.shape[-3]] if full_only else range(10, videos1.shape[-3] + 1)
 
     # Process each clip_timestamp >= 10
-    for clip_timestamp in tqdm(range(10, videos1.shape[-3] + 1)):
+    for clip_timestamp in tqdm(clip_timestamps):
         fvd_feats1 = []
         fvd_feats2 = []
 
@@ -160,7 +184,21 @@ def calculate_fvd_batch(videos1, videos2, device, method="styleganv", batch_size
     }
 
 
-def read_video_our(data_path, subdir, ground_truth=True, num_videos=None):
+def read_frame(frame_path):
+    frame = cv2.imread(frame_path)
+    if frame is None:
+        raise FileNotFoundError(f"Failed to read frame: {frame_path}")
+    return frame
+
+
+def read_video_our(
+    data_path,
+    subdir,
+    ground_truth=True,
+    num_videos=None,
+    test_length=None,
+    read_workers=1,
+):
     """
     read video from dir
     Args:
@@ -170,25 +208,49 @@ def read_video_our(data_path, subdir, ground_truth=True, num_videos=None):
         video: [batch_size, timestamps, channel, h, w]
     """
     episode_subfolder = sorted(
-        d for d in os.listdir(args.data_path)
-        if os.path.isdir(os.path.join(args.data_path, d))
+        d for d in os.listdir(data_path)
+        if os.path.isdir(os.path.join(data_path, d))
     )
     if num_videos:
         episode_subfolder = episode_subfolder[:num_videos]
 
+    subdirs = [d.strip() for d in subdir.split(",") if d.strip()]
     frames_all_videos = []
-    for episode in episode_subfolder:
-        video_path = os.path.join(data_path, episode, subdir)
-        frame_names = sorted(os.listdir(video_path))[-25:]  # TODO: only to_BCTHWfer the last 25 frames to video
-        frames = []
-        for frame_name in frame_names:
-            frame_path = os.path.join(video_path, frame_name)
-            # read image
-            frame = cv2.imread(frame_path)
-            frames.append(frame)
-        frames_all_videos.append(np.array(frames))
+    expected_num_frames = None
 
-    frames_all_videos = torch.tensor(np.array(frames_all_videos)).permute(0, 1, 4, 2, 3)
+    executor = None
+    if read_workers and read_workers > 1:
+        executor = ThreadPoolExecutor(max_workers=read_workers)
+
+    try:
+        for episode in episode_subfolder:
+            frame_paths = []
+            for one_subdir in subdirs:
+                video_path = os.path.join(data_path, episode, one_subdir)
+                frame_names = sorted(os.listdir(video_path))
+                frame_paths.extend(os.path.join(video_path, frame_name) for frame_name in frame_names)
+
+            if test_length:
+                frame_paths = frame_paths[-test_length:]
+
+            if executor is None:
+                frames = [read_frame(frame_path) for frame_path in frame_paths]
+            else:
+                frames = list(executor.map(read_frame, frame_paths))
+
+            if expected_num_frames is None:
+                expected_num_frames = len(frames)
+            elif len(frames) != expected_num_frames:
+                raise ValueError(
+                    f"Inconsistent frame count for {episode}: got {len(frames)}, "
+                    f"expected {expected_num_frames}."
+                )
+            frames_all_videos.append(np.stack(frames))
+    finally:
+        if executor is not None:
+            executor.shutdown()
+
+    frames_all_videos = torch.from_numpy(np.stack(frames_all_videos)).permute(0, 1, 4, 2, 3)
     print("frames_all_videos.shape", frames_all_videos.shape)
     return frames_all_videos
 
@@ -199,8 +261,22 @@ def main(args):
     # SIZE = 64
     SIZE = 224
 
-    gt_videos = read_video_our(args.data_path, args.gt_subdir, ground_truth=True, num_videos=args.num_videos)
-    gen_videos = read_video_our(args.data_path, args.gen_subdir, ground_truth=False, num_videos=args.num_videos)
+    gt_videos = read_video_our(
+        args.data_path,
+        args.gt_subdir,
+        ground_truth=True,
+        num_videos=args.num_videos,
+        test_length=args.test_length,
+        read_workers=args.read_workers,
+    )
+    gen_videos = read_video_our(
+        args.data_path,
+        args.gen_subdir,
+        ground_truth=False,
+        num_videos=args.num_videos,
+        test_length=args.test_length,
+        read_workers=args.read_workers,
+    )
 
     _, _, C, H, W = gt_videos.shape
     # normalize to [0, 1]
@@ -213,13 +289,20 @@ def main(args):
 
     import json
     result = {}
-    result['fvd'] = calculate_fvd_batch(video1, video2, device, method="styleganv")
-    result['ssim'] = calculate_ssim(video1, video2)
-    result['psnr'] = calculate_psnr(video1, video2)
+    result['fvd'] = calculate_fvd_batch(
+        video1,
+        video2,
+        device,
+        method="styleganv",
+        full_only=args.fvd_full_only,
+    )
+    result['ssim'] = calculate_ssim(video1, video2, device=device, batch_size=args.ssim_batch_size)
+    result['psnr'] = calculate_psnr(video1, video2, device=device, batch_size=args.psnr_batch_size)
     result['lpips'] = calculate_lpips(video1, video2, device)
     result['latent_mse'] = calculate_latent_mse(video1, video2)
     result['loop_closure_latent_mse'] = calculate_latent_mse(video1[:, -1:], video2[:, -1:])
 
+    result = to_jsonable(result)
     print(json.dumps(result, indent=4))
 
     if args.result_file:
@@ -253,6 +336,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--num_videos", type=int, default=100)
     parser.add_argument("--test_length", type=int, default=25)
+    parser.add_argument("--read_workers", type=int, default=8)
+    parser.add_argument("--ssim_batch_size", type=int, default=16)
+    parser.add_argument("--psnr_batch_size", type=int, default=64)
+    parser.add_argument(
+        "--fvd_full_only",
+        action="store_true",
+        help="Only calculate FVD for the full clip length instead of every length from 10 to test_length.",
+    )
     args = parser.parse_args()
     args.result_file = os.path.join(args.data_path, args.result_file)
     os.makedirs(os.path.dirname(args.result_file), exist_ok=True)

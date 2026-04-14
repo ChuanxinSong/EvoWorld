@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 import os
 import sys
@@ -253,6 +254,37 @@ class UnifiedLoopConsistencyPipeline:
             frames.append(self.load_frame_tensor(episode_path, frame_id))
         return frames
 
+    def is_episode_complete(self, episode: str) -> bool:
+        if not self.args.save_frames:
+            return False
+
+        episode_save_dir = os.path.join(self.args.save_dir, episode)
+        if self.args.single_segment:
+            predictions_dir = os.path.join(episode_save_dir, "predictions")
+            if not os.path.isdir(predictions_dir):
+                return False
+
+            saved_frames = [
+                name for name in os.listdir(predictions_dir)
+                if name.lower().endswith(".png")
+            ]
+            return len(saved_frames) == self.args.num_frames
+
+        for segment_id in range(self.args.num_segments):
+            predictions_dir = os.path.join(episode_save_dir, f"predictions_{segment_id}")
+            if not os.path.isdir(predictions_dir):
+                return False
+
+            expected_frames = self.args.num_frames if segment_id == 0 else self.args.num_frames - 1
+            saved_frames = [
+                name for name in os.listdir(predictions_dir)
+                if name.lower().endswith(".png")
+            ]
+            if len(saved_frames) != expected_frames:
+                return False
+
+        return True
+
     @torch.inference_mode()
     def generate_segment(
         self,
@@ -370,7 +402,16 @@ class UnifiedLoopConsistencyPipeline:
                 continue
             if idx >= self.args.num_data + self.args.start_idx:
                 break
-            self.process_episode(episode, episode_path)
+            if self.args.skip_completed and self.is_episode_complete(episode):
+                episode_label = episode or os.path.basename(os.path.normpath(episode_path))
+                self.logger.info("Skipping completed episode: %s", episode_label)
+                continue
+            try:
+                self.process_episode(episode, episode_path)
+            finally:
+                if self.navigator is not None:
+                    self.navigator.clear_runtime_state()
+                gc.collect()
 
     @torch.inference_mode()
     def run_single_segment(self) -> None:
@@ -382,16 +423,20 @@ class UnifiedLoopConsistencyPipeline:
 
         pipeline, rays, weight_dtype = self.setup_model_and_pipeline(self.args)
         data_root, is_single_video = self.determine_data_config()
-        val_dataset, val_loader = self.create_dataset_and_loader(data_root, is_single_video)
+        val_dataset, _ = self.create_dataset_and_loader(data_root, is_single_video)
 
-        for idx, batch in tqdm(enumerate(val_loader), total=len(val_loader)):
+        for idx in tqdm(range(len(val_dataset)), total=len(val_dataset)):
             if idx < self.args.start_idx:
                 continue
             if idx >= self.args.num_data + self.args.start_idx:
                 break
             current_episode = val_dataset.episodes[idx]
+            if self.args.skip_completed and self.is_episode_complete(current_episode):
+                self.logger.info("Skipping completed episode: %s", current_episode)
+                continue
             episode_save_dir = os.path.join(self.args.save_dir, current_episode)
             os.makedirs(episode_save_dir, exist_ok=True)
+            batch = torch.utils.data.default_collate([val_dataset[idx]])
             # ensure arg for process_batch
             self.args.mask_mem = False
             self.logger.info("")
@@ -438,6 +483,11 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--pers_width", type=int, default=DEFAULT_PERS_W, help="Perspective width for VGGT stage")
     parser.add_argument("--pers_height", type=int, default=DEFAULT_PERS_H, help="Perspective height for VGGT stage")
     parser.add_argument("--save_frames", action="store_true", help="Save intermediate frames")
+    parser.add_argument(
+        "--skip_completed",
+        action="store_true",
+        help="Skip episodes whose prediction frame counts are complete.",
+    )
     parser.add_argument(
         "--decode_chunk_size",
         type=int,

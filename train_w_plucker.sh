@@ -22,7 +22,7 @@ source paths.env
 REPROJ_NAME="rendered_panorama_vggt_open3d_camera_aligned_new_code"
 
 # GPU settings
-GPU_IDS="3" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
+GPU_IDS="5" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
 
 # configuration file, you can add more config files in the config folder
 # CONFIG_NAME="deepspeed_o1_4gpu"
@@ -32,8 +32,8 @@ CONFIG_NAME="deepspeed_o2" # accelerate_config  deepspeed_o2
 MASTER_PORT=47216
 
 Sampling_Method="empty_with_traj" # "empty_with_traj" or "reprojection"
-ONLY_POSITION=0
-USE_LORA=1
+ONLY_POSITION=1
+USE_LORA=0
 
 # global seed
 SEED=42
@@ -55,7 +55,6 @@ LR="1e-5"
 LR_WARMUP_STEP=500
 LR_SCHEDULER="cosine"
 PRECISION="fp16"
-# PRECISION="bf16"
 VALIDATION_STEP=5000
 NUM_VALIDATION_IMAGES=1
 RESUME_FROM="latest"
