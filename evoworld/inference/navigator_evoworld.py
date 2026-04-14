@@ -73,6 +73,21 @@ class Navigator:
     def clear_movements(self):
         self.generations = []
 
+    def clear_runtime_state(self):
+        self.generations = []
+        self.start_image = None
+        self.memorized_images = None
+        self.previous_images = torch.empty(
+            (0, *self.previous_images.shape[1:]),
+            device=self.previous_images.device,
+            dtype=self.previous_images.dtype,
+        )
+        self.previous_trajectoies = torch.empty(
+            (0, 6),
+            device=self.previous_trajectoies.device,
+            dtype=self.previous_trajectoies.dtype,
+        )
+
     def get_all_frames(self):
 
         flattened_frames = [

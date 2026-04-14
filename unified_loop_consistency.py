@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 import math
 import os
@@ -548,7 +549,12 @@ class UnifiedLoopConsistencyPipeline:
                 self.logger.info(f"Skipping completed episode: {current_episode}")
                 continue
             batch = torch.utils.data.default_collate([val_dataset[idx]])
-            self.process_episode(batch, current_episode, val_dataset)
+            try:
+                self.process_episode(batch, current_episode, val_dataset)
+            finally:
+                if self.navigator is not None:
+                    self.navigator.clear_runtime_state()
+                gc.collect()
 
     @torch.inference_mode()
     def run_single_segment(self) -> None:
