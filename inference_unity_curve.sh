@@ -4,6 +4,8 @@ set -e
 # Unified Loop Consistency Pipeline Runner
 # This script runs the unified pipeline that combines generation and reconstruction
 
+# 一张卡大概需要36小时
+
 # link to correct cudnn and cuda
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
 
@@ -14,10 +16,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/paths.env"
 
 # CKPT=MODELS/evoworld_curve_unity
-# CKPT=/data1/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93/
-
+CKPT=/data3/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93/
 # CKPT=/home/user/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-576
-CKPT=/home/user/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-512
+# CKPT=/home/user/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-512
 
 OUTPUT_ROOT="$Result_OUTPUT_ROOT"
 SAVE_DIR="$OUTPUT_ROOT/$(basename "$CKPT")/eval_unity_curve"
@@ -27,7 +28,7 @@ NUM_SEGMENTS=3
 CURVE_PATH=true
 SKIP_COMPLETED=true
 WIDTH=1024
-HEIGHT=512 # 576 | 512
+HEIGHT=576 # 576 | 512
 
 echo "Running unified loop consistency pipeline..."
 echo "Checkpoint: $CKPT"

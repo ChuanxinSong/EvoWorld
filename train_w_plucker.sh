@@ -22,18 +22,21 @@ source paths.env
 REPROJ_NAME="rendered_panorama_vggt_open3d_camera_aligned_new_code"
 
 # GPU settings
-GPU_IDS="5" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
+GPU_IDS="2,4" # 指定你想要使用的 GPU ID，例如 "0,1,2,3"
 
 # configuration file, you can add more config files in the config folder
 # CONFIG_NAME="deepspeed_o1_4gpu"
 CONFIG_NAME="deepspeed_o2" # accelerate_config  deepspeed_o2
 
 # 指定主进程端口号（用于多进程通信）
-MASTER_PORT=47216
+MASTER_PORT=47226
 
 Sampling_Method="empty_with_traj" # "empty_with_traj" or "reprojection"
-ONLY_POSITION=1
+ONLY_POSITION=0
 USE_LORA=0
+
+BATCH_SIZE_PER_GPU=1
+GRAD_ACCUM_STEP=2
 
 # global seed
 SEED=42
@@ -59,8 +62,7 @@ VALIDATION_STEP=5000
 NUM_VALIDATION_IMAGES=1
 RESUME_FROM="latest"
 CURRENT_TIME=$(date +"%Y%m%d_%H%M%S")
-BATCH_SIZE_PER_GPU=1
-GRAD_ACCUM_STEP=4
+
 # GPUS_PER_NODE=$(nvidia-smi -L | wc -l) # 注释掉这行，防止覆盖你自定义的 GPU 数量
 GPUS_PER_NODE=$(echo $GPU_IDS | tr ',' '\n' | wc -l)
 WORLD_SIZE=$((GPUS_PER_NODE * GRAD_ACCUM_STEP * BATCH_SIZE_PER_GPU))

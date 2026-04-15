@@ -13,9 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/paths.env"
 
 # CKPT=MODELS/evoworld_curve_unity
-# CKPT=/data1/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93/
+CKPT=/data3/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93/
 
-CKPT=/home/user/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-576
+# CKPT=/home/user/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-576
 # CKPT=/home/user/songcx/code/EvoWorld/evo_checkpoints/unity_curve-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-H-512
 
 OUTPUT_ROOT="$Result_OUTPUT_ROOT"
@@ -27,7 +27,7 @@ CURVE_PATH=true
 SKIP_COMPLETED=true
 WIDTH=1024
 HEIGHT=576 # 576 | 512
-GPU_IDS="${GPU_IDS:-5,4}" # comma-separated GPU ids, e.g. GPU_IDS=2,3
+GPU_IDS="${GPU_IDS:-2,4}" # comma-separated GPU ids, e.g. GPU_IDS=2,3
 LOG_TO_CONSOLE="${LOG_TO_CONSOLE:-true}"
 
 mkdir -p "$SAVE_DIR"
