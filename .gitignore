@@ -217,3 +217,5 @@ output
 google
 token.pickle
 scripts/upload_models_and_data
+
+.codex
