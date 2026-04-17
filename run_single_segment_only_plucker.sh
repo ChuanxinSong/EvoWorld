@@ -3,7 +3,7 @@
 # Plucker-only single-segment runner
 # Inference matches empty_with_traj training: first frame + plucker + zero memory
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=2
 
 # link to correct cudnn and cuda
 export LD_LIBRARY_PATH="$CONDA_PREFIX/lib:$LD_LIBRARY_PATH"
@@ -13,10 +13,9 @@ HEIGHT=512
 
 # CKPT=MODELS/evoworld_curve_unity
 # CKPT=/data1/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93
-CKPT=evo_checkpoints/unity_curve-OnlyPlucker-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25-only-position/onlyposition_checkpoint-10000_pipeline
-# CKPT=evo_checkpoints/unity_curve-OnlyPlucker-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25/checkpoint-10000_pipeline
+CKPT=evo_checkpoints/unity_curve-OnlyPlucker-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25
 
-ONLY_POSITION=1 # set to 1 to only use position embedding, set to 0 to use full plucker embedding
+ONLY_POSITION=0 # set to 1 to only use position embedding, set to 0 to use full plucker embedding
 CLIP_START_FRAME=1 # set to 1 to start from the first frame.
 
 BASE_FOLDER=example/case_000

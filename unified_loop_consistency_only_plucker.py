@@ -34,6 +34,7 @@ from evoworld.inference.navigator_evoworld import Navigator
 from evoworld.inference.forward_evoworld import process_batch
 from evoworld.trainer.unet_plucker import UNetSpatioTemporalConditionModel
 from evoworld.pipeline.pipeline_evoworld import StableVideoDiffusionPipeline
+from conver_equi_cube import safe_equi2equi_resize
 from utils.image_utils import frame_to_pil, pil_to_tensor, tensor_to_pil
 from utils.plucker_embedding import equirectangular_to_ray
 
@@ -246,7 +247,15 @@ class UnifiedLoopConsistencyPipeline:
 
     def load_frame_tensor(self, episode_path: str, frame_id: int) -> torch.Tensor:
         frame = Image.open(self.resolve_frame_path(episode_path, frame_id)).convert("RGB")
-        return pil_to_tensor(frame)
+        frame_tensor = pil_to_tensor(frame)
+        if frame_tensor.shape[-2:] != (self.args.height, self.args.width):
+            frame_tensor = safe_equi2equi_resize(
+                frame_tensor.unsqueeze(0),
+                height=self.args.height,
+                width=self.args.width,
+                mode="bilinear",
+            ).squeeze(0)
+        return frame_tensor
 
     def load_gt_frames(self, episode_path: str, start_idx: int, end_idx: int) -> List[torch.Tensor]:
         frames: List[torch.Tensor] = []

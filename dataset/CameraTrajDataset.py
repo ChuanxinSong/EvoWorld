@@ -911,7 +911,7 @@ class CameraTrajDataset(Dataset):
             num_frames = current_traj.shape[0]
             return {
                 "images": torch.zeros(num_frames, 3, self.height, self.width),
-                "traj": current_traj,
+                "traj": current_traj.clone(),
             }
         else:
             raise ValueError(

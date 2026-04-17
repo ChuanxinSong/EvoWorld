@@ -87,7 +87,6 @@ def create_dataset_and_loader(args, data_root: str, is_single_video: bool, loop_
         width=args.width,
         height=args.height,
         trajectory_file=None,
-        pos_scale=1.0,
         memory_sampling_args=loop_args,
         sequence_length=args.num_frames,
         last_segment_length=args.num_frames,

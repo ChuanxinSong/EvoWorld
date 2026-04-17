@@ -355,7 +355,7 @@ class Navigator:
             segments.append(segment)
             start_idx = end_idx - 1
             end_idx = start_idx + 25
-        if end_idx - start_idx > 1 and start_idx < total_len:
+        if total_len - start_idx > 1:
             segment = path[start_idx:]
             segments.append(segment)
         return segments

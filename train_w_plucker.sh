@@ -33,7 +33,7 @@ MASTER_PORT=47226
 
 Sampling_Method="empty_with_traj" # "empty_with_traj" or "reprojection"
 ONLY_POSITION=0
-USE_LORA=0
+USE_LORA=1
 
 BATCH_SIZE_PER_GPU=1
 GRAD_ACCUM_STEP=2
