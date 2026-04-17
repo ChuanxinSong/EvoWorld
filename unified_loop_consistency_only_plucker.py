@@ -31,9 +31,11 @@ sys.path.append("third_party/vggt/")
 # Project imports
 # -----------------------
 from evoworld.inference.navigator_evoworld import Navigator
-from evoworld.inference.forward_evoworld import process_batch
+from evoworld.inference.forward_evoworld_only_plucker import process_batch
 from evoworld.trainer.unet_plucker import UNetSpatioTemporalConditionModel
-from evoworld.pipeline.pipeline_evoworld import StableVideoDiffusionPipeline
+from evoworld.pipeline.pipeline_evoworld_only_plucker import (
+    StableVideoDiffusionOnlyPluckerPipeline as StableVideoDiffusionPipeline,
+)
 from conver_equi_cube import safe_equi2equi_resize
 from utils.image_utils import frame_to_pil, pil_to_tensor, tensor_to_pil
 from utils.plucker_embedding import equirectangular_to_ray
@@ -118,6 +120,7 @@ class UnifiedLoopConsistencyPipeline:
         self.navigator.get_pipeline(
             self.args.unet_path,
             self.args.svd_path,
+            pipeline_cls=StableVideoDiffusionPipeline,
             model_width=self.args.width,
             model_height=self.args.height,
             progress_bar=False,
@@ -225,20 +228,6 @@ class UnifiedLoopConsistencyPipeline:
 
         return start_idx, end_idx
 
-    def build_zero_memory(self) -> torch.Tensor:
-        zero_memory = torch.zeros(
-            1,
-            self.args.num_frames,
-            3,
-            self.args.height,
-            self.args.width,
-            dtype=torch.float32,
-            device=self.device,
-        )
-        if torch.count_nonzero(zero_memory).item() != 0:
-            raise RuntimeError("Expected zero memory tensor for plucker-only inference.")
-        return zero_memory
-
     def resolve_frame_path(self, episode_path: str, frame_id: int) -> str:
         frame_path = os.path.join(episode_path, "panorama", f"{frame_id:03}.png")
         if os.path.isfile(frame_path):
@@ -299,7 +288,6 @@ class UnifiedLoopConsistencyPipeline:
         self,
         segment_traj: torch.Tensor,
         start_image: torch.Tensor,
-        zero_memory: torch.Tensor,
     ) -> List[Image.Image]:
         assert self.navigator is not None
 
@@ -307,16 +295,13 @@ class UnifiedLoopConsistencyPipeline:
             self.navigator,
             "navigate_curve_path" if self.args.curve_path else "navigate_path",
         )
-        # Navigator uses `segment_id != 0` to decide whether memory latents are
-        # active. We keep memory enabled here, but pass an all-zero tensor so
-        # inference matches empty_with_traj training.
         generations = navigate_fn(
             segment_traj,
             start_image,
             width=self.args.width,
             height=self.args.height,
             num_inference_steps=25,
-            memorized_images=zero_memory,
+            memorized_images=None,
             infer_segment=False,
             segment_id=1,
         )
@@ -330,11 +315,6 @@ class UnifiedLoopConsistencyPipeline:
         episode_save_dir = os.path.join(self.args.save_dir, episode)
         os.makedirs(episode_save_dir, exist_ok=True)
         camera_params = self.load_camera_poses(episode_path)
-        zero_memory = self.build_zero_memory()
-        self.logger.info(
-            "Using zero memory with shape %s for all segments.",
-            tuple(zero_memory.shape),
-        )
 
         all_generated_frames: List[Image.Image] = []
         initial_frame = self.load_frame_tensor(episode_path, 1).to(self.device)
@@ -363,7 +343,7 @@ class UnifiedLoopConsistencyPipeline:
             else:
                 start_image = pil_to_tensor(tensor_to_pil(all_generated_frames[-1])).to(self.device)
 
-            generated_frames = self.generate_segment(segment_traj, start_image, zero_memory)
+            generated_frames = self.generate_segment(segment_traj, start_image)
 
             if all_generated_frames:
                 generated_frames = generated_frames[1:]  # avoid duplicating first frame
@@ -398,7 +378,7 @@ class UnifiedLoopConsistencyPipeline:
 
         set_random_seeds(self.args.seed)
         self.logger.info("Starting plucker-only unified pipeline...")
-        self.logger.info("Mode: empty_with_traj + first frame + plucker embedding + zero memory")
+        self.logger.info("Mode: empty_with_traj + first frame + plucker embedding only")
         self.logger.info(f"UNet Path: {self.args.unet_path}")
         self.logger.info(f"SVD Path:  {self.args.svd_path}")
 
@@ -426,7 +406,7 @@ class UnifiedLoopConsistencyPipeline:
     def run_single_segment(self) -> None:
         set_random_seeds(self.args.seed)
         self.logger.info("Starting plucker-only single-segment path...")
-        self.logger.info("Mode: empty_with_traj + first frame + plucker embedding + zero memory")
+        self.logger.info("Mode: empty_with_traj + first frame + plucker embedding only")
         self.logger.info(f"UNet Path: {self.args.unet_path}")
         self.logger.info(f"SVD Path:  {self.args.svd_path}")
 

@@ -63,6 +63,7 @@ class Navigator:
         ])
         self.retrieve_time = 0
         self.start_image = None
+        self.uses_only_plucker_pipeline = False
 
     def set_current_image(self, image):
         self.generations.append([image])
@@ -116,7 +117,19 @@ class Navigator:
 
         return current_trajectory
 
-    def get_pipeline(self, unet_path, svd_path, num_frames=25, fps=7, progress_bar=True, image_width=1024, image_height=576, model_width=1024, model_height=None):
+    def get_pipeline(
+        self,
+        unet_path,
+        svd_path,
+        num_frames=25,
+        fps=7,
+        progress_bar=True,
+        image_width=1024,
+        image_height=576,
+        model_width=1024,
+        model_height=None,
+        pipeline_cls=StableVideoDiffusionPipeline,
+    ):
         unet = UNetSpatioTemporalConditionModel.from_pretrained(
             unet_path,
             subfolder="unet",
@@ -124,7 +137,10 @@ class Navigator:
             low_cpu_mem_usage=True,
         )
         self.logger.info('Unet Loaded')
-        pipe = StableVideoDiffusionPipeline.from_pretrained(
+        self.uses_only_plucker_pipeline = (
+            getattr(pipeline_cls, "__name__", "") == "StableVideoDiffusionOnlyPluckerPipeline"
+        )
+        pipe = pipeline_cls.from_pretrained(
             svd_path,
             unet=unet,
             low_cpu_mem_usage=True,
@@ -227,7 +243,7 @@ class Navigator:
         plucker_embedding = all_plucker_embedding[:25].unsqueeze(0)
         memorized_plucker_embedding = all_plucker_embedding[25:].unsqueeze(0)
         generator = torch.manual_seed(-1)
-        memorized_pixel_values = self.memorized_images.clone()
+        memorized_pixel_values = None if self.uses_only_plucker_pipeline else self.memorized_images.clone()
         with torch.inference_mode():
             frames = self.pipe(image.unsqueeze(0),
                                num_frames=self.num_frames,
@@ -383,7 +399,7 @@ class Navigator:
         path: [steps, 6]
         """
         current_segment = 0
-        self.memorized_images = memorized_images.clone()
+        self.memorized_images = None if memorized_images is None else memorized_images.clone()
         generations = []
         self.start_image = start_image
 
@@ -442,7 +458,7 @@ class Navigator:
         path: [steps, 6]
         """
         current_segment = 0
-        self.memorized_images = memorized_images.clone()
+        self.memorized_images = None if memorized_images is None else memorized_images.clone()
         generations = []
         self.start_image = start_image
 

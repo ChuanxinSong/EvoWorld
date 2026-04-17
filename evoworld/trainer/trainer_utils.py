@@ -59,7 +59,10 @@ def _replace_unet_conv_in_zero_init(unet, n_cond=2, n_memory=0, add_plucker=Fals
 
     # Replace the layer and update config
     unet.conv_in = _new_conv_in
-    unet.config["in_channels"] = _in_channels
+    if hasattr(unet, "register_to_config"):
+        unet.register_to_config(in_channels=_in_channels)
+    else:
+        unet.config["in_channels"] = _in_channels
 
     return
 

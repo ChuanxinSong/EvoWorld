@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Plucker-only multi-segment runner
-# Inference matches empty_with_traj training: first frame + plucker + zero memory
+# Inference matches no-memory training: first frame + plucker only
 export CUDA_VISIBLE_DEVICES=2
 
 # link to correct cudnn and cuda
@@ -15,7 +15,7 @@ HEIGHT=256
 
 # CKPT=MODELS/evoworld_curve_unity
 # CKPT=/data3/songcx/huggingface_cache/hub/models--CometsFeiyu--Evoworld_Unity_Curve_Path/snapshots/d6250ea37f38341f49dfe1009402e3684c2efc93
-CKPT=evo_checkpoints/unity_curve-OnlyPlucker-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25
+CKPT=evo_checkpoints/unity_curve-OnlyPluckerNoMemory-deepspeed_o2-lr-1e-5-step-30000-worldsize-4-length-25
 
 BASE_FOLDER=example/case_000
 # OUTPUT_ROOT=output
@@ -29,7 +29,7 @@ CURVE_PATH=true
 DECODE_CHUNK_SIZE=8
 
 echo "Running plucker-only multi-segment pipeline..."
-echo "Mode: empty_with_traj + first frame + plucker embedding + zero memory"
+echo "Mode: empty_with_traj + first frame + plucker embedding only"
 echo "Checkpoint: $CKPT"
 echo "Base folder: $BASE_FOLDER"
 echo "Save dir: $SAVE_DIR"

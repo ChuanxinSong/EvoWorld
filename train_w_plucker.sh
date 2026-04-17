@@ -31,9 +31,9 @@ CONFIG_NAME="deepspeed_o2" # accelerate_config  deepspeed_o2
 # 指定主进程端口号（用于多进程通信）
 MASTER_PORT=47226
 
-Sampling_Method="empty_with_traj" # "empty_with_traj" or "reprojection"
+Sampling_Method="empty_with_traj" # only-plucker no-memory requires "empty_with_traj"
 ONLY_POSITION=0
-USE_LORA=1
+USE_LORA=0
 
 BATCH_SIZE_PER_GPU=1
 GRAD_ACCUM_STEP=2
@@ -45,7 +45,7 @@ SEED=42
 # DATASET_NAME="Curve_Loop" # Coming Soon!
 DATASET_NAME="unity_curve"
 WIDTH=1024
-HEIGHT=512
+HEIGHT=576
 NUM_FRAMES=25
 
 # model & trainer settings
@@ -113,15 +113,15 @@ accelerate launch --config_file="config/${LAUNCH_CONFIG_NAME}.yaml" \
     --num_processes=$GPUS_PER_NODE \
     --gpu_ids=$GPU_IDS \
     --main_process_port=$MASTER_PORT \
-    evoworld/trainer/train_w_plucker.py \
+    evoworld/trainer/train_w_plucker_only.py \
     --base_folder=$BASE_FOLDER \
     --reprojection_name=$REPROJ_NAME \
     --pretrained_model_name_or_path=$PRETRAIN_MODEL \
     --num_frames=$NUM_FRAMES \
     --width=$WIDTH \
     --height=$HEIGHT \
-    --output_dir="$OUTPUT_ROOT/$DATASET_NAME-OnlyPlucker${LORA_DIR_TAG}-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES$RUN_SUFFIX" \
-    --logging_dir="$OUTPUT_ROOT/$DATASET_NAME-OnlyPlucker${LORA_DIR_TAG}-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES$RUN_SUFFIX/logs" \
+    --output_dir="$OUTPUT_ROOT/$DATASET_NAME-OnlyPluckerNoMemory${LORA_DIR_TAG}-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES$RUN_SUFFIX" \
+    --logging_dir="$OUTPUT_ROOT/$DATASET_NAME-OnlyPluckerNoMemory${LORA_DIR_TAG}-$CONFIG_NAME-lr-$LR-step-$STEP-worldsize-$WORLD_SIZE-length-$NUM_FRAMES$RUN_SUFFIX/logs" \
     --per_gpu_batch_size=$BATCH_SIZE_PER_GPU \
     --gradient_accumulation_steps=$GRAD_ACCUM_STEP \
     --max_train_steps=$STEP \
